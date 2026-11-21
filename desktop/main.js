@@ -334,7 +334,8 @@ ipcMain.handle('updater:check', () => triggerUpdateCheck(false));
 ipcMain.handle('updater:download', () => autoUpdater.downloadUpdate());
 ipcMain.handle('updater:install', () => {
   stopBackend();
-  autoUpdater.quitAndInstall(false, true);
+  // Silent one-click update + automatic relaunch (no Next -> Next -> Finish wizard!)
+  autoUpdater.quitAndInstall(true, true);
 });
 
 async function createWindow() {

@@ -1321,6 +1321,17 @@ input[type="range"] {
   transform: translateX(16px);
 }
 
+.btn-update-ready {
+  background: linear-gradient(135deg, #00e68a, #00c4ff) !important;
+  color: #061214 !important;
+  border-color: transparent !important;
+  box-shadow: 0 4px 20px rgba(0, 230, 138, 0.4);
+}
+.btn-update-ready .pill-count {
+  background: rgba(0, 0, 0, 0.22);
+  color: #041012;
+}
+
 /* Pulsing Update Dot & Update Center Modal */
 .update-dot {
   width: 8px;

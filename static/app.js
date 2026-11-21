@@ -97,6 +97,7 @@
   const btnCloseChangelog = document.getElementById('btnCloseChangelog');
   const changelogBody = document.getElementById('changelogBody');
   const btnCheckUpdates = document.getElementById('btnCheckUpdates');
+  const updateBtnLabel = document.getElementById('updateBtnLabel');
   const updateDot = document.getElementById('updateDot');
   const appVersionPill = document.getElementById('appVersionPill');
   const updateBanner = document.getElementById('updateBanner');
@@ -887,56 +888,61 @@
     btnCheckUpdates.classList.remove('hidden');
     let latestReleaseUrl = null;
     let manualClick = false;
-    let hasUpdateReady = false;
-    let dismissedModalOnce = false;
-
-    const closeUpdateModal = () => {
-      updateModal.classList.add('hidden');
-      dismissedModalOnce = true;
-    };
+    let updateState = 'idle'; // idle | downloading | downloaded | manual-download
 
     desk.getVersion().then((v) => {
       if (v) appVersionPill.textContent = `v${v}`;
     }).catch(() => {});
 
+    // Single 1-click button:
+    // - If downloaded -> instant silent install & restart!
+    // - If manual fallback -> direct download!
+    // - Otherwise -> check for updates!
     btnCheckUpdates.addEventListener('click', () => {
-      if (hasUpdateReady) {
-        updateModal.classList.remove('hidden');
+      if (updateState === 'downloaded') {
+        updateBtnLabel.textContent = 'Перезапуск...';
+        btnCheckUpdates.disabled = true;
+        desk.installUpdate();
+        return;
+      }
+      if (updateState === 'manual-download') {
+        desk.openExternal(latestReleaseUrl);
+        return;
+      }
+      if (updateState === 'downloading') {
+        showToast('Обновление скачивается в фоне — скоро появится кнопка установки');
         return;
       }
       manualClick = true;
-      dismissedModalOnce = false;
       btnCheckUpdates.disabled = true;
+      updateBtnLabel.textContent = 'Проверка...';
       desk.checkForUpdates().finally(() => {
-        setTimeout(() => { btnCheckUpdates.disabled = false; }, 1500);
+        setTimeout(() => {
+          btnCheckUpdates.disabled = false;
+          if (updateState === 'idle') updateBtnLabel.textContent = 'Обновления';
+        }, 1500);
       });
     });
-
-    btnInstallUpdate.addEventListener('click', () => desk.installUpdate());
-    btnModalInstallNow.addEventListener('click', () => desk.installUpdate());
-    btnOpenRelease.addEventListener('click', () => desk.openExternal(latestReleaseUrl));
-    btnModalOpenRelease.addEventListener('click', () => desk.openExternal(latestReleaseUrl));
-    btnDismissUpdate.addEventListener('click', () => updateBanner.classList.add('hidden'));
-    btnCloseUpdateModal.addEventListener('click', closeUpdateModal);
-    btnUpdateLater.addEventListener('click', closeUpdateModal);
-    updateModalBackdrop.addEventListener('click', closeUpdateModal);
 
     desk.onUpdateStatus((payload) => {
       if (!payload) return;
       const st = payload.state;
 
       if (st === 'checking') {
-        if (manualClick) showToast('Проверка обновлений...');
         return;
       }
       if (st === 'up-to-date') {
+        updateState = 'idle';
+        updateBtnLabel.textContent = 'Обновления';
         if (manualClick) {
-          showToast(payload.message || 'У вас установлена последняя версия!');
+          showToast(payload.message || 'У вас последняя версия!');
           manualClick = false;
         }
         return;
       }
       if (st === 'error') {
+        updateState = 'idle';
+        updateBtnLabel.textContent = 'Обновления';
         if (manualClick) {
           showToast(payload.message || 'Ошибка проверки обновлений');
           manualClick = false;
@@ -944,57 +950,29 @@
         return;
       }
 
-      hasUpdateReady = true;
-      if (updateDot) updateDot.classList.remove('hidden');
-
-      // Update top subtle banner
-      updateBanner.classList.remove('hidden');
-      updateMessage.textContent = payload.message || 'Обновление TikCut Studio';
-      updateBarWrap.classList.add('hidden');
-      btnInstallUpdate.classList.add('hidden');
-      btnOpenRelease.classList.add('hidden');
-
-      // Update Center Modal
-      if (payload.version && payload.currentVersion) {
-        updateModalVersions.textContent = `v${payload.currentVersion} → v${payload.version}`;
-      }
-      updateModalStatus.textContent = payload.message || 'Обновление TikCut Studio';
-      if (payload.releaseNotes) {
-        updateModalNotes.textContent = payload.releaseNotes;
-        updateModalNotesWrap.classList.remove('hidden');
-      }
-
-      updateModalProgressWrap.classList.add('hidden');
-      btnModalInstallNow.classList.add('hidden');
-      btnModalOpenRelease.classList.add('hidden');
-
       if (st === 'available') {
-        updateModalTitle.textContent = `Найдено обновление v${payload.version || ''}`;
-        if (!dismissedModalOnce) updateModal.classList.remove('hidden');
+        updateState = 'downloading';
+        if (updateDot) updateDot.classList.remove('hidden');
+        updateBtnLabel.textContent = 'Загрузка...';
+        showToast(`Найдено обновление v${payload.version} — скачивается в фоне`);
       } else if (st === 'downloading') {
+        updateState = 'downloading';
         const pct = payload.percent || 0;
-        updateBarWrap.classList.remove('hidden');
-        updateBarFill.style.width = `${pct}%`;
-        updateModalTitle.textContent = 'Загрузка обновления...';
-        updateModalProgressWrap.classList.remove('hidden');
-        updateModalBar.style.width = `${pct}%`;
-        if (payload.doneMb && payload.totalMb) {
-          updateModalSize.textContent = `${payload.doneMb} / ${payload.totalMb} МБ (${pct}%)`;
-        }
-        if (payload.speedMb) {
-          updateModalSpeed.textContent = `${payload.speedMb} МБ/с`;
-        }
+        if (updateDot) updateDot.classList.remove('hidden');
+        updateBtnLabel.textContent = `Обновление ${pct}%`;
       } else if (st === 'downloaded') {
-        btnInstallUpdate.classList.remove('hidden');
-        btnModalInstallNow.classList.remove('hidden');
-        updateModalTitle.textContent = `Обновление v${payload.version || ''} готово!`;
-        updateModal.classList.remove('hidden');
+        updateState = 'downloaded';
+        if (updateDot) updateDot.classList.add('hidden');
+        btnCheckUpdates.classList.add('btn-update-ready');
+        updateBtnLabel.textContent = `⚡ Обновить до v${payload.version || ''}`;
+        appVersionPill.textContent = '1 клик';
+        showToast(`Обновление v${payload.version} готово — нажмите «⚡ Обновить» сверху!`);
       } else if (st === 'manual-download') {
+        updateState = 'manual-download';
         latestReleaseUrl = payload.releaseUrl || null;
-        btnOpenRelease.classList.remove('hidden');
-        btnModalOpenRelease.classList.remove('hidden');
-        updateModalTitle.textContent = `Доступно обновление v${payload.version || ''}`;
-        if (!dismissedModalOnce) updateModal.classList.remove('hidden');
+        btnCheckUpdates.classList.add('btn-update-ready');
+        updateBtnLabel.textContent = `⬇ Скачать v${payload.version || ''}`;
+        appVersionPill.textContent = 'NEW';
       }
     });
   }
