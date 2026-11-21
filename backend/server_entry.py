@@ -9,6 +9,45 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _register_windows_cuda_dlls() -> None:
+    """Register bundled NVIDIA CUDA/cuBLAS/cuDNN DLL directories on Windows."""
+    if os.name != "nt":
+        return
+    candidates = []
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass = Path(sys._MEIPASS)
+        candidates.extend([
+            meipass,
+            meipass / "nvidia" / "cublas" / "bin",
+            meipass / "nvidia" / "cudnn" / "bin",
+            meipass / "cuda_dlls",
+        ])
+    # Also check site-packages nvidia wheels in dev mode
+    for sp in sys.path:
+        p = Path(sp)
+        candidates.extend([
+            p / "nvidia" / "cublas" / "bin",
+            p / "nvidia" / "cudnn" / "bin",
+        ])
+
+    added = []
+    for d in candidates:
+        if d.exists() and d.is_dir():
+            s = str(d)
+            if s not in added:
+                added.append(s)
+                if hasattr(os, "add_dll_directory"):
+                    try:
+                        os.add_dll_directory(s)
+                    except Exception:
+                        pass
+    if added:
+        os.environ["PATH"] = os.pathsep.join(added) + os.pathsep + os.environ.get("PATH", "")
+
+
+_register_windows_cuda_dlls()
+
 import uvicorn
 from backend.main import app
 

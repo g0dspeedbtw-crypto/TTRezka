@@ -39,8 +39,20 @@ def _detect_nvidia_gpu() -> Optional[Dict[str, Any]]:
 
 def _detect_ctranslate2_cuda() -> bool:
     try:
+        import ctypes
+        import os
         import ctranslate2
-        return int(ctranslate2.get_cuda_device_count()) > 0
+
+        if int(ctranslate2.get_cuda_device_count()) <= 0:
+            return False
+
+        # On Windows, verify cublas64_12.dll is actually loadable before enabling CUDA
+        if os.name == "nt":
+            try:
+                ctypes.WinDLL("cublas64_12.dll")
+            except OSError:
+                return False
+        return True
     except Exception:
         return False
 

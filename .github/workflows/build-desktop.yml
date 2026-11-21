@@ -43,6 +43,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install fastapi uvicorn python-multipart pillow numpy faster-whisper yt-dlp opencv-python-headless pyinstaller
 
+      - name: Install NVIDIA CUDA 12 runtime DLLs (Windows RTX support)
+        if: matrix.platform == 'win'
+        run: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+
       - name: Download bundled Cyrillic fonts
         run: python -m backend.download_fonts
 

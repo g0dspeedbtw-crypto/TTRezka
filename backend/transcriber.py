@@ -34,7 +34,7 @@ HALLUCINATION_PATTERNS = (
 )
 
 
-def get_whisper_model(model_size: str = "small") -> Tuple[WhisperModel, str]:
+def get_whisper_model(model_size: str = "small", force_cpu: bool = False) -> Tuple[WhisperModel, str]:
     """
     Load and cache a faster-whisper model.
     Uses NVIDIA CUDA FP16 automatically on RTX GPUs (e.g. RTX 4060 Ti) with safe CPU int8 fallback.
@@ -42,18 +42,19 @@ def get_whisper_model(model_size: str = "small") -> Tuple[WhisperModel, str]:
     if model_size not in ALLOWED_MODELS:
         model_size = "small"
 
-    if model_size in _MODEL_CACHE:
-        return _MODEL_CACHE[model_size]
+    cache_key = f"{model_size}:{'cpu' if force_cpu else 'auto'}"
+    if cache_key in _MODEL_CACHE:
+        return _MODEL_CACHE[cache_key]
 
     hw = get_hardware_info()
-    if hw.get("cuda_whisper"):
+    if not force_cpu and hw.get("cuda_whisper"):
         try:
             model = WhisperModel(
                 model_size,
                 device="cuda",
                 compute_type="float16",
             )
-            _MODEL_CACHE[model_size] = (model, "cuda")
+            _MODEL_CACHE[cache_key] = (model, "cuda")
             return model, "cuda"
         except Exception as exc:
             print(f"[whisper] CUDA load failed ({exc}), falling back to CPU int8")
@@ -64,7 +65,7 @@ def get_whisper_model(model_size: str = "small") -> Tuple[WhisperModel, str]:
         compute_type="int8",
         cpu_threads=0,
     )
-    _MODEL_CACHE[model_size] = (model, "cpu")
+    _MODEL_CACHE[cache_key] = (model, "cpu")
     return model, "cpu"
 
 
@@ -123,20 +124,17 @@ def _clean_word_token(raw: str) -> str:
     return txt
 
 
-def transcribe_russian(
+def _run_whisper_pass(
     audio_wav_path: Path,
     total_duration: float,
-    model_size: str = "small",
-    progress_cb: Optional[Callable[[float, str], None]] = None,
+    model_size: str,
+    force_cpu: bool,
+    progress_cb: Optional[Callable[[float, str], None]],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """
-    Transcribe Russian audio with clean word-level timestamps & hallucination suppression.
-    Automatically leverages NVIDIA RTX CUDA FP16 when available.
-    """
     if progress_cb:
         progress_cb(0.05, f"Загрузка модели Whisper ({model_size})...")
 
-    model, dev = get_whisper_model(model_size)
+    model, dev = get_whisper_model(model_size, force_cpu=force_cpu)
     dev_label = "RTX CUDA FP16" if dev == "cuda" else "CPU int8"
 
     if progress_cb:
@@ -180,7 +178,6 @@ def transcribe_russian(
                     continue
                 ws = round(float(w.start), 3)
                 we = round(max(ws + 0.06, float(w.end)), 3)
-                # Merge orphan punctuation onto previous word instead of making a separate subtitle token
                 if re.fullmatch(r"[.!?,…:—–-]+", txt) and seg_words:
                     seg_words[-1]["word"] += txt
                     seg_words[-1]["end"] = max(seg_words[-1]["end"], we)
@@ -218,3 +215,27 @@ def transcribe_russian(
         progress_cb(1.0, f"Распознано {len(words)} слов ({dev_label})")
 
     return segments, words
+
+
+def transcribe_russian(
+    audio_wav_path: Path,
+    total_duration: float,
+    model_size: str = "small",
+    progress_cb: Optional[Callable[[float, str], None]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Transcribe Russian audio with clean word-level timestamps & hallucination suppression.
+    Automatically leverages NVIDIA RTX CUDA FP16 and falls back seamlessly to CPU int8
+    if CUDA/cuBLAS/cuDNN DLLs throw a runtime error.
+    """
+    try:
+        return _run_whisper_pass(audio_wav_path, total_duration, model_size, force_cpu=False, progress_cb=progress_cb)
+    except Exception as exc:
+        err_low = str(exc).lower()
+        if any(k in err_low for k in ("cublas", "cudnn", "cuda", "dll", "gpu", "curand")):
+            print(f"[whisper] CUDA runtime error ({exc}), retrying automatically on CPU int8...")
+            _MODEL_CACHE.pop(f"{model_size}:auto", None)
+            if progress_cb:
+                progress_cb(0.08, "Переключение распознавания на CPU int8...")
+            return _run_whisper_pass(audio_wav_path, total_duration, model_size, force_cpu=True, progress_cb=progress_cb)
+        raise

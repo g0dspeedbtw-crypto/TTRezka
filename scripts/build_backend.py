@@ -20,6 +20,21 @@ def main() -> None:
     fonts_src = ROOT / "backend" / "fonts"
     changelog_src = ROOT / "CHANGELOG.md"
 
+    # On Windows, bundle NVIDIA cuBLAS 12 / cuDNN 9 DLLs if installed so RTX CUDA works out-of-the-box!
+    extra_bins = []
+    if os.name == "nt":
+        import site
+        sp_dirs = [Path(p) for p in site.getsitepackages()] + [Path(sys.prefix) / "Lib" / "site-packages"]
+        seen_dlls = set()
+        for sp in sp_dirs:
+            for sub in ("nvidia/cublas/bin", "nvidia/cudnn/bin"):
+                d = sp / sub
+                if d.exists():
+                    for dll in d.glob("*.dll"):
+                        if dll.name.lower() not in seen_dlls:
+                            seen_dlls.add(dll.name.lower())
+                            extra_bins.append(f"--add-binary={dll}{sep}cuda_dlls")
+
     cmd = [
         sys.executable,
         "-m",
@@ -38,6 +53,7 @@ def main() -> None:
         f"--add-data={static_src}{sep}static",
         f"--add-data={fonts_src}{sep}backend/fonts",
         f"--add-data={changelog_src}{sep}.",
+        *extra_bins,
         "--collect-all",
         "faster_whisper",
         "--collect-all",
