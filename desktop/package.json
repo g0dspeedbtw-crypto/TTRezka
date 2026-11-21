@@ -26,7 +26,8 @@
       {
         "provider": "github",
         "owner": "g0dspeedbtw-crypto",
-        "repo": "TTRezka"
+        "repo": "TTRezka",
+        "releaseType": "release"
       }
     ],
     "directories": {
