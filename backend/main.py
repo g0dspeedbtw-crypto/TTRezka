@@ -21,6 +21,7 @@ from backend.config import (
     get_available_fonts,
     get_subtitle_styles,
 )
+from backend.hardware import get_hardware_info
 from backend.pipeline import (
     create_job,
     get_job,
@@ -63,6 +64,9 @@ class ProcessRequest(BaseModel):
     jump_cuts: bool = Field(default=False)
     bg_music_id: Optional[str] = Field(default=None)
     bg_music_volume: float = Field(default=0.18, ge=0.05, le=0.5)
+    target_fps: int = Field(default=30)
+    video_enhance: bool = Field(default=False)
+    ollama_model: Optional[str] = Field(default=None)
 
 
 class RerenderRequest(BaseModel):
@@ -80,6 +84,8 @@ class RerenderRequest(BaseModel):
     jump_cuts: bool = Field(default=False)
     bg_music_id: Optional[str] = Field(default=None)
     bg_music_volume: float = Field(default=0.18, ge=0.05, le=0.5)
+    target_fps: int = Field(default=30)
+    video_enhance: bool = Field(default=False)
     edited_transcript: Optional[str] = Field(default=None)
     edited_hook_text: Optional[str] = Field(default=None)
     trim_start: Optional[float] = Field(default=None)
@@ -106,7 +112,13 @@ def api_config() -> Dict[str, Any]:
     return {
         "fonts": get_available_fonts(),
         "styles": get_subtitle_styles(),
+        "hardware": get_hardware_info(),
     }
+
+
+@app.get("/api/hardware")
+def api_hardware() -> Dict[str, Any]:
+    return get_hardware_info(force_refresh=True)
 
 
 def _parse_changelog_md(text: str) -> Dict[str, Any]:

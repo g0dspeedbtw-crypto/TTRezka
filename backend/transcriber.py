@@ -1,26 +1,50 @@
-"""Local Russian speech-to-text transcription using faster-whisper."""
+"""Local Russian speech-to-text transcription using faster-whisper (CUDA FP16 on NVIDIA RTX + CPU int8 fallback)."""
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from faster_whisper import WhisperModel
 
-_MODEL_CACHE: Dict[str, WhisperModel] = {}
+from backend.hardware import get_hardware_info
+
+_MODEL_CACHE: Dict[str, Tuple[WhisperModel, str]] = {}
+
+ALLOWED_MODELS = {"tiny", "base", "small", "medium", "large-v3-turbo"}
 
 
-def get_whisper_model(model_size: str = "small") -> WhisperModel:
-    """Load and cache a faster-whisper model (CPU int8, fast on Apple Silicon)."""
-    allowed = {"tiny", "base", "small", "medium"}
-    if model_size not in allowed:
+def get_whisper_model(model_size: str = "small") -> Tuple[WhisperModel, str]:
+    """
+    Load and cache a faster-whisper model.
+    Uses NVIDIA CUDA FP16 automatically on RTX GPUs (e.g. RTX 4060 Ti) with safe CPU int8 fallback.
+    Returns (model, device_used).
+    """
+    if model_size not in ALLOWED_MODELS:
         model_size = "small"
-    if model_size not in _MODEL_CACHE:
-        _MODEL_CACHE[model_size] = WhisperModel(
-            model_size,
-            device="cpu",
-            compute_type="int8",
-            cpu_threads=0,
-        )
-    return _MODEL_CACHE[model_size]
+
+    if model_size in _MODEL_CACHE:
+        return _MODEL_CACHE[model_size]
+
+    hw = get_hardware_info()
+    if hw.get("cuda_whisper"):
+        try:
+            model = WhisperModel(
+                model_size,
+                device="cuda",
+                compute_type="float16",
+            )
+            _MODEL_CACHE[model_size] = (model, "cuda")
+            return model, "cuda"
+        except Exception as exc:
+            print(f"[whisper] CUDA load failed ({exc}), falling back to CPU int8")
+
+    model = WhisperModel(
+        model_size,
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=0,
+    )
+    _MODEL_CACHE[model_size] = (model, "cpu")
+    return model, "cpu"
 
 
 def extract_audio_wav(video_path: Path, wav_path: Path) -> Path:
@@ -53,15 +77,16 @@ def transcribe_russian(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Transcribe Russian audio with word-level timestamps.
-    Returns (segments, words).
+    Automatically leverages NVIDIA RTX CUDA FP16 when available.
     """
     if progress_cb:
-        progress_cb(0.05, f"Загрузка локальной модели Whisper ({model_size})...")
+        progress_cb(0.05, f"Загрузка модели Whisper ({model_size})...")
 
-    model = get_whisper_model(model_size)
+    model, dev = get_whisper_model(model_size)
+    dev_label = "RTX CUDA FP16" if dev == "cuda" else "CPU int8"
 
     if progress_cb:
-        progress_cb(0.12, "Распознавание русской речи и таймкодов слов...")
+        progress_cb(0.12, f"Распознавание русской речи ({model_size} • {dev_label})...")
 
     segments_gen, _info = model.transcribe(
         str(audio_wav_path),
@@ -69,7 +94,7 @@ def transcribe_russian(
         word_timestamps=True,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 450},
-        beam_size=3,
+        beam_size=5 if dev == "cuda" else 3,
     )
 
     segments: List[Dict[str, Any]] = []
@@ -106,10 +131,10 @@ def transcribe_russian(
             frac = min(0.98, max(0.12, float(seg.end) / total_duration))
             progress_cb(
                 frac,
-                f"Распознавание речи: {int(seg.end)} / {int(total_duration)} сек...",
+                f"Распознавание ({dev_label}): {int(seg.end)} / {int(total_duration)} сек...",
             )
 
     if progress_cb:
-        progress_cb(1.0, f"Распознано {len(words)} слов")
+        progress_cb(1.0, f"Распознано {len(words)} слов ({dev_label})")
 
     return segments, words

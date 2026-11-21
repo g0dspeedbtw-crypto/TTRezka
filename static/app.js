@@ -48,6 +48,11 @@
   const uppercaseToggle = document.getElementById('uppercaseToggle');
   const hookBannerToggle = document.getElementById('hookBannerToggle');
   const jumpCutsToggle = document.getElementById('jumpCutsToggle');
+  const fps60Toggle = document.getElementById('fps60Toggle');
+  const videoEnhanceToggle = document.getElementById('videoEnhanceToggle');
+  const ollamaRow = document.getElementById('ollamaRow');
+  const ollamaSelect = document.getElementById('ollamaSelect');
+  const hwBadge = document.getElementById('hwBadge');
   const watermarkInput = document.getElementById('watermarkInput');
   const bgMusicSelect = document.getElementById('bgMusicSelect');
   const musicFileInput = document.getElementById('musicFileInput');
@@ -133,6 +138,7 @@
     const cfg = await res.json();
     state.fonts = cfg.fonts || [];
     state.styles = cfg.styles || [];
+    applyHardwareInfo(cfg.hardware);
 
     renderStyleCards();
     renderFontOptions();
@@ -144,6 +150,28 @@
 
     await refreshMusicList();
     await refreshHistory();
+  }
+
+  function applyHardwareInfo(hw) {
+    if (!hw) return;
+    if (hwBadge && hw.label) {
+      hwBadge.textContent = `${hw.label} • 9:16 + Русские авто-субтитры`;
+    }
+    // Auto-select Large-v3-Turbo & 60 FPS recommendation on NVIDIA RTX CUDA GPUs
+    if (hw.cuda_whisper) {
+      whisperModel.value = 'large-v3-turbo';
+    }
+    const models = hw.ollama_models || [];
+    if (models.length > 0 && ollamaRow && ollamaSelect) {
+      ollamaRow.classList.remove('hidden');
+      ollamaSelect.innerHTML = '<option value="">Выкл (стандартный быстрый анализ)</option>';
+      models.forEach((m) => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = `🧠 ${m} (локально на GPU)`;
+        ollamaSelect.appendChild(opt);
+      });
+    }
   }
 
   async function refreshMusicList() {
@@ -486,6 +514,9 @@
       jump_cuts: jumpCutsToggle.checked,
       bg_music_id: bgMusicSelect.value || null,
       bg_music_volume: 0.18,
+      target_fps: fps60Toggle && fps60Toggle.checked ? 60 : 30,
+      video_enhance: !!(videoEnhanceToggle && videoEnhanceToggle.checked),
+      ollama_model: ollamaSelect ? ollamaSelect.value || null : null,
     };
   }
 

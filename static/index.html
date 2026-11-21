@@ -15,7 +15,7 @@
       <div class="brand-icon">▶</div>
       <div>
         <div class="brand-title">TikCut Studio</div>
-        <div class="brand-sub">100% локально • Бесплатно • 9:16 + Русские авто-субтитры</div>
+        <div class="brand-sub" id="hwBadge">100% локально • Бесплатно • 9:16 + Русские авто-субтитры</div>
       </div>
     </div>
     <div class="topbar-actions">
@@ -137,8 +137,9 @@
             <select id="whisperModel">
               <option value="tiny">Tiny — сверхбыстро (черновик)</option>
               <option value="base">Base — быстро</option>
-              <option value="small" selected>Small — оптимально (рекомендуется)</option>
-              <option value="medium">Medium — максимальная точность</option>
+              <option value="small" selected>Small — оптимально (CPU)</option>
+              <option value="medium">Medium — высокая точность</option>
+              <option value="large-v3-turbo">⚡ Large-v3-Turbo — RTX CUDA (макс. качество)</option>
             </select>
           </div>
 
@@ -234,6 +235,21 @@
               <input id="jumpCutsToggle" type="checkbox" />
               <span>✂️ Jump-Cuts (убрать паузы)</span>
             </label>
+            <label class="checkbox-label">
+              <input id="fps60Toggle" type="checkbox" />
+              <span>⚡ 60 FPS (для игр и RTX NVENC)</span>
+            </label>
+            <label class="checkbox-label">
+              <input id="videoEnhanceToggle" type="checkbox" />
+              <span>🎨 Сочность и резкость кадра</span>
+            </label>
+          </div>
+
+          <div id="ollamaRow" class="field hidden">
+            <label for="ollamaSelect">🧠 Локальный ИИ-продюсер (Ollama на вашей RTX GPU)</label>
+            <select id="ollamaSelect">
+              <option value="">Выкл (стандартный быстрый анализ)</option>
+            </select>
           </div>
 
           <div class="form-grid">

@@ -3,11 +3,14 @@ import json
 import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.config import JOBS_DIR, MUSIC_DIR
+from backend.hardware import get_hardware_info
 from backend.highlights import _make_clip_title, find_highlights
+from backend.ollama_ranker import enhance_highlights_with_ollama
 from backend.remote import (
     download_clip_segment,
     fetch_remote_transcript,
@@ -173,6 +176,8 @@ def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str
         "jump_cuts": bool(options.get("jump_cuts", False)),
         "bg_music_path": _resolve_music_path(options.get("bg_music_id")),
         "bg_music_volume": float(options.get("bg_music_volume", 0.18)),
+        "target_fps": int(options.get("target_fps", 30)),
+        "video_enhance": bool(options.get("video_enhance", False)),
     }
 
 
@@ -225,6 +230,11 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             max_duration=max_dur,
             progress_cb=on_hl,
         )
+
+        ollama_model = (options.get("ollama_model") or "").strip()
+        if ollama_model and words:
+            _update_job(job_id, stage="analyzing", progress=39, message=f"Усиление отбора и заголовков через локальный Ollama ({ollama_model})...")
+            highlights = enhance_highlights_with_ollama(highlights, ollama_model)
 
         whisper_model = options.get("whisper_model", "small")
         rendered_clips: List[Dict[str, Any]] = []
@@ -399,16 +409,17 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             progress_cb=on_highlights,
         )
 
-        rendered_clips: List[Dict[str, Any]] = []
+        ollama_model = (options.get("ollama_model") or "").strip()
+        if ollama_model and words:
+            _update_job(job_id, stage="analyzing", progress=66, message=f"Усиление отбора и заголовков через локальный Ollama ({ollama_model})...")
+            highlights = enhance_highlights_with_ollama(highlights, ollama_model)
+
+        hw = get_hardware_info()
+        workers = int(hw.get("max_parallel_renders", 1))
         n_total = max(1, len(highlights))
-        for idx, hl in enumerate(highlights):
-            pct = int(68 + (idx / n_total) * 30)
-            _update_job(
-                job_id,
-                stage="rendering",
-                progress=pct,
-                message=f"Рендеринг клипа {idx + 1} из {n_total} (9:16 + эффекты и субтитры)...",
-            )
+
+        def _render_one(idx_hl):
+            idx, hl = idx_hl
             clip_id = hl["id"]
             out_mp4 = jdir / f"{clip_id}.mp4"
             out_thumb = jdir / f"{clip_id}.jpg"
@@ -433,8 +444,47 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             hl_out["trim_end"] = hl["end"]
             hl_out["version"] = int(time.time())
             hl_out["file_size_mb"] = round(out_mp4.stat().st_size / (1024 * 1024), 2)
-            rendered_clips.append(hl_out)
-            _update_job(job_id, clips=rendered_clips)
+            return idx, hl_out
+
+        rendered_map: Dict[int, Dict[str, Any]] = {}
+        if workers > 1 and n_total > 1:
+            _update_job(
+                job_id,
+                stage="rendering",
+                progress=70,
+                message=f"Параллельный RTX NVENC рендер {n_total} клипов ({workers} потока)...",
+            )
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futs = [pool.submit(_render_one, (i, hl)) for i, hl in enumerate(highlights)]
+                done_cnt = 0
+                for fut in as_completed(futs):
+                    idx, hl_out = fut.result()
+                    rendered_map[idx] = hl_out
+                    done_cnt += 1
+                    pct = int(68 + (done_cnt / n_total) * 30)
+                    ordered = [rendered_map[k] for k in sorted(rendered_map.keys())]
+                    _update_job(
+                        job_id,
+                        stage="rendering",
+                        progress=pct,
+                        message=f"RTX NVENC рендер: готово {done_cnt} из {n_total} клипов...",
+                        clips=ordered,
+                    )
+        else:
+            for idx, hl in enumerate(highlights):
+                pct = int(68 + (idx / n_total) * 30)
+                _update_job(
+                    job_id,
+                    stage="rendering",
+                    progress=pct,
+                    message=f"Рендеринг клипа {idx + 1} из {n_total} (9:16 + эффекты и субтитры)...",
+                )
+                _, hl_out = _render_one((idx, hl))
+                rendered_map[idx] = hl_out
+                ordered = [rendered_map[k] for k in sorted(rendered_map.keys())]
+                _update_job(job_id, clips=ordered)
+
+        rendered_clips = [rendered_map[k] for k in sorted(rendered_map.keys())]
 
         _update_job(
             job_id,

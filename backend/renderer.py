@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from backend.config import SUBTITLE_STYLES, resolve_font_path
 from backend.face_track import detect_face_center_x
+from backend.hardware import get_hardware_info
 
 VIDEO_W = 1080
 VIDEO_H = 1920
@@ -565,6 +566,8 @@ def render_clip(
     jump_cuts: bool = False,
     bg_music_path: Optional[Path] = None,
     bg_music_volume: float = 0.18,
+    target_fps: int = 30,
+    video_enhance: bool = False,
 ) -> Path:
     """
     Render a 1080x1920 9:16 TikTok MP4 clip with word-by-word subtitles,
@@ -650,6 +653,7 @@ def render_clip(
             next_idx += 1
 
         # Build filter_complex
+        out_fps = 60 if int(target_fps or 30) >= 60 else 30
         video_chain = _build_video_framing_chain(
             crop_mode=crop_mode,
             source_video=work_video,
@@ -658,10 +662,18 @@ def render_clip(
             webcam_corner=webcam_corner,
             webcam_size=webcam_size,
         )
+        enhance_step = (
+            "[base]eq=contrast=1.06:saturation=1.14,unsharp=5:5:0.65:5:5:0.0[base_e];"
+            if video_enhance
+            else ""
+        )
+        base_label = "base_e" if video_enhance else "base"
+
         fc = (
             f"{video_chain}"
-            f"[1:v]fps=30,format=rgba[sub];"
-            f"[base][sub]overlay=x=0:y={overlay_y}:shortest=1[v_sub];"
+            f"{enhance_step}"
+            f"[1:v]fps={out_fps},format=rgba[sub];"
+            f"[{base_label}][sub]overlay=x=0:y={overlay_y}:shortest=1,fps={out_fps}[v_sub];"
         )
         cur_v = "v_sub"
 
@@ -687,10 +699,25 @@ def render_clip(
 
         fc = fc.rstrip(";")
 
-        encoders = [
-            ["-c:v", "h264_videotoolbox", "-b:v", "6M", "-pix_fmt", "yuv420p"],
-            ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"],
-        ]
+        # Hardware-aware encoder priority: NVIDIA RTX NVENC -> Apple VideoToolbox -> libx264
+        hw = get_hardware_info()
+        bitrate = "10M" if out_fps >= 60 else "7M"
+        maxrate = "14M" if out_fps >= 60 else "10M"
+        encoders: List[List[str]] = []
+        if hw.get("has_nvenc"):
+            encoders.append([
+                "-c:v", "h264_nvenc",
+                "-preset", "p5",
+                "-tune", "hq",
+                "-rc", "vbr",
+                "-cq", "19",
+                "-b:v", bitrate,
+                "-maxrate", maxrate,
+                "-pix_fmt", "yuv420p",
+            ])
+        if hw.get("has_videotoolbox"):
+            encoders.append(["-c:v", "h264_videotoolbox", "-b:v", bitrate, "-pix_fmt", "yuv420p"])
+        encoders.append(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
 
         last_err = ""
         for enc_args in encoders:
