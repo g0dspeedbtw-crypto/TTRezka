@@ -2,12 +2,13 @@
   "name": "tikcut-studio",
   "productName": "TikCut Studio",
   "version": "1.0.0",
+  "author": "TikCut Studio",
   "description": "Локальное десктопное приложение для TikTok нарезок 9:16 с ИИ-анализом и авто-субтитрами",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:mac": "electron-builder --mac dmg zip dir",
-    "build:win": "electron-builder --win nsis portable",
+    "build:mac": "electron-builder --mac dmg zip dir --publish never",
+    "build:win": "electron-builder --win nsis portable --publish never",
     "publish:mac": "electron-builder --mac dmg zip --publish always",
     "publish:win": "electron-builder --win nsis portable --publish always"
   },
