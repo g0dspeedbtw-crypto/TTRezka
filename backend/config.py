@@ -11,10 +11,11 @@ else:
 DATA_DIR = Path(os.environ.get("TIKCUT_DATA_DIR", str(BASE_DIR / "data")))
 UPLOADS_DIR = DATA_DIR / "uploads"
 JOBS_DIR = DATA_DIR / "jobs"
+MUSIC_DIR = DATA_DIR / "music"
 FONTS_DIR = BASE_DIR / "backend" / "fonts"
 STATIC_DIR = BASE_DIR / "static"
 
-for _d in (DATA_DIR, UPLOADS_DIR, JOBS_DIR, FONTS_DIR, STATIC_DIR):
+for _d in (DATA_DIR, UPLOADS_DIR, JOBS_DIR, MUSIC_DIR, FONTS_DIR, STATIC_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 

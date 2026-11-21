@@ -155,13 +155,37 @@
 
         <div class="field-group">
           <label>Формат кадра 9:16</label>
-          <div class="segmented" id="cropModeGroup">
+          <div class="segmented four-col" id="cropModeGroup">
             <button type="button" class="seg-btn active" data-value="fill">
-              📱 Заполнение (Crop 9:16)
+              📱 Заполнение
+            </button>
+            <button type="button" class="seg-btn" data-value="face_track">
+              🤖 Face Track
+            </button>
+            <button type="button" class="seg-btn" data-value="split_stream">
+              🎮 Стрим Split
             </button>
             <button type="button" class="seg-btn" data-value="blur_bg">
-              🌫 Размытый фон (весь кадр)
+              🌫 Размытый фон
             </button>
+          </div>
+        </div>
+
+        <div id="splitStreamSettings" class="sub-box hidden">
+          <div class="form-grid">
+            <div class="field">
+              <label for="webcamCorner">Где находится веб-камера стримера?</label>
+              <select id="webcamCorner">
+                <option value="bottom_left" selected>Нижний левый угол</option>
+                <option value="bottom_right">Нижний правый угол</option>
+                <option value="top_left">Верхний левый угол</option>
+                <option value="top_right">Верхний правый угол</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="webcamSize">Размер области вебки: <strong id="webcamSizeVal">28%</strong></label>
+              <input id="webcamSize" type="range" min="18" max="42" value="28" />
+            </div>
           </div>
         </div>
 
@@ -195,11 +219,39 @@
           </div>
         </div>
 
-        <div class="toggle-row">
-          <label class="checkbox-label">
-            <input id="uppercaseToggle" type="checkbox" checked />
-            <span>ЗАГЛАВНЫЕ БУКВЫ (CAPS) для максимальной читаемости</span>
-          </label>
+        <div class="pro-box">
+          <div class="pro-box-title">⚡ Удержание, брендинг и музыка</div>
+          <div class="toggle-grid">
+            <label class="checkbox-label">
+              <input id="uppercaseToggle" type="checkbox" checked />
+              <span>ЗАГЛАВНЫЕ БУКВЫ (CAPS)</span>
+            </label>
+            <label class="checkbox-label">
+              <input id="hookBannerToggle" type="checkbox" />
+              <span>🏷 Заголовок-хук сверху (4 сек)</span>
+            </label>
+            <label class="checkbox-label">
+              <input id="jumpCutsToggle" type="checkbox" />
+              <span>✂️ Jump-Cuts (убрать паузы)</span>
+            </label>
+          </div>
+
+          <div class="form-grid">
+            <div class="field">
+              <label for="watermarkInput">Водяной знак канала (@ник)</label>
+              <input id="watermarkInput" type="text" placeholder="Например: @ttrezka" maxlength="36" />
+            </div>
+            <div class="field">
+              <label for="bgMusicSelect">🎵 Фоновая музыка (авто-приглушение)</label>
+              <div class="music-row">
+                <select id="bgMusicSelect">
+                  <option value="">Без музыки</option>
+                </select>
+                <input id="musicFileInput" type="file" accept=".mp3,.wav,.m4a,.ogg" hidden />
+                <button id="btnUploadMusic" type="button" class="btn btn-secondary btn-sm">+ MP3</button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <button id="btnStart" type="button" class="btn btn-primary btn-lg" disabled>
@@ -219,10 +271,15 @@
           <div id="previewScreen" class="phone-screen mode-fill">
             <div class="preview-bg-blur"></div>
             <div class="preview-video-frame">
+              <div class="preview-split-cam hidden" id="previewSplitCam">🎥 ВЕБКА СТРИМЕРА</div>
               <div class="preview-ambient-orb"></div>
               <div class="preview-grid-lines"></div>
-              <div class="preview-center-label">9:16 HD 1080×1920</div>
+              <div class="preview-center-label" id="previewCenterLabel">9:16 HD 1080×1920</div>
             </div>
+
+            <!-- Live Watermark & Hook Banner Preview -->
+            <div id="previewWatermark" class="preview-watermark hidden">@ttrezka</div>
+            <div id="previewHookBanner" class="preview-hook-banner hidden">ОН НЕ ОЖИДАЛ ТАКОГО!</div>
 
             <!-- Simulated TikTok right-side UI icons -->
             <div class="tiktok-ui-icons">
@@ -275,6 +332,9 @@
           <h2>Готовые TikTok нарезки 9:16</h2>
           <p id="resultsMeta" class="results-meta">Отобраны самые динамичные и эмоциональные моменты</p>
         </div>
+        <a id="btnDownloadAllZip" class="btn btn-primary hidden" href="#" download>
+          📦 Скачать все (.zip)
+        </a>
       </div>
 
       <div id="clipsGrid" class="clips-grid"></div>
@@ -290,6 +350,44 @@
         <button id="btnCloseHistory" class="btn btn-ghost btn-sm">✕</button>
       </div>
       <div id="historyList" class="history-list"></div>
+    </div>
+  </div>
+
+  <!-- Clip Editor Modal (Subtitles + Trim + Hook) -->
+  <div id="clipEditorModal" class="modal hidden">
+    <div class="modal-backdrop" id="editorBackdrop"></div>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <div>
+          <h3>✏️ Редактор клипа</h3>
+          <div class="modal-sub">Исправьте субтитры, заголовок-хук или границы обрезки — перерендер займёт пару секунд</div>
+        </div>
+        <button id="btnCloseEditor" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div class="editor-form">
+        <div class="field">
+          <label for="editHookInput">Заголовок-хук (для верхней плашки и названия)</label>
+          <input id="editHookInput" type="text" maxlength="70" />
+        </div>
+        <div class="form-grid">
+          <div class="field">
+            <label for="editTrimStart">Начало клипа (сек)</label>
+            <input id="editTrimStart" type="number" step="0.5" min="0" />
+          </div>
+          <div class="field">
+            <label for="editTrimEnd">Конец клипа (сек)</label>
+            <input id="editTrimEnd" type="number" step="0.5" min="2" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="editTranscriptInput">Текст субтитров (можно исправить ники, опечатки и пунктуацию)</label>
+          <textarea id="editTranscriptInput" rows="5"></textarea>
+        </div>
+        <div class="editor-footer">
+          <button id="btnCancelEditor" type="button" class="btn btn-ghost">Отмена</button>
+          <button id="btnSaveEditor" type="button" class="btn btn-primary">💾 Сохранить и перерендерить</button>
+        </div>
+      </div>
     </div>
   </div>
 

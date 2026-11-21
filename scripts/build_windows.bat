@@ -7,7 +7,7 @@ if not exist .venv (
     python -m venv .venv
 )
 .venv\Scripts\python.exe -m pip install --upgrade pip
-.venv\Scripts\pip.exe install fastapi uvicorn python-multipart pillow numpy faster-whisper yt-dlp pyinstaller
+.venv\Scripts\pip.exe install fastapi uvicorn python-multipart pillow numpy faster-whisper yt-dlp opencv-python-headless pyinstaller
 
 echo === 2. Download Cyrillic TikTok fonts ===
 .venv\Scripts\python.exe -m backend.download_fonts

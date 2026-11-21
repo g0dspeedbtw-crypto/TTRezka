@@ -37,14 +37,28 @@
   const minDuration = document.getElementById('minDuration');
   const maxDuration = document.getElementById('maxDuration');
   const cropModeGroup = document.getElementById('cropModeGroup');
+  const splitStreamSettings = document.getElementById('splitStreamSettings');
+  const webcamCorner = document.getElementById('webcamCorner');
+  const webcamSize = document.getElementById('webcamSize');
+  const webcamSizeVal = document.getElementById('webcamSizeVal');
   const styleCards = document.getElementById('styleCards');
   const fontSelect = document.getElementById('fontSelect');
   const fontSize = document.getElementById('fontSize');
   const subPosition = document.getElementById('subPosition');
   const uppercaseToggle = document.getElementById('uppercaseToggle');
+  const hookBannerToggle = document.getElementById('hookBannerToggle');
+  const jumpCutsToggle = document.getElementById('jumpCutsToggle');
+  const watermarkInput = document.getElementById('watermarkInput');
+  const bgMusicSelect = document.getElementById('bgMusicSelect');
+  const musicFileInput = document.getElementById('musicFileInput');
+  const btnUploadMusic = document.getElementById('btnUploadMusic');
   const btnStart = document.getElementById('btnStart');
 
   const previewScreen = document.getElementById('previewScreen');
+  const previewSplitCam = document.getElementById('previewSplitCam');
+  const previewCenterLabel = document.getElementById('previewCenterLabel');
+  const previewWatermark = document.getElementById('previewWatermark');
+  const previewHookBanner = document.getElementById('previewHookBanner');
   const liveSubBox = document.getElementById('liveSubBox');
   const liveSubText = document.getElementById('liveSubText');
 
@@ -57,7 +71,18 @@
 
   const resultsSection = document.getElementById('resultsSection');
   const resultsMeta = document.getElementById('resultsMeta');
+  const btnDownloadAllZip = document.getElementById('btnDownloadAllZip');
   const clipsGrid = document.getElementById('clipsGrid');
+
+  const clipEditorModal = document.getElementById('clipEditorModal');
+  const editorBackdrop = document.getElementById('editorBackdrop');
+  const btnCloseEditor = document.getElementById('btnCloseEditor');
+  const btnCancelEditor = document.getElementById('btnCancelEditor');
+  const btnSaveEditor = document.getElementById('btnSaveEditor');
+  const editHookInput = document.getElementById('editHookInput');
+  const editTrimStart = document.getElementById('editTrimStart');
+  const editTrimEnd = document.getElementById('editTrimEnd');
+  const editTranscriptInput = document.getElementById('editTranscriptInput');
 
   const btnHistory = document.getElementById('btnHistory');
   const historyCount = document.getElementById('historyCount');
@@ -117,7 +142,24 @@
       updateLivePreview();
     }, 620);
 
+    await refreshMusicList();
     await refreshHistory();
+  }
+
+  async function refreshMusicList() {
+    try {
+      const res = await fetch('/api/music');
+      const data = await res.json();
+      const prev = bgMusicSelect.value;
+      bgMusicSelect.innerHTML = '<option value="">Без музыки</option>';
+      (data.tracks || []).forEach((t) => {
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = `🎵 ${t.name}`;
+        bgMusicSelect.appendChild(opt);
+      });
+      if (prev) bgMusicSelect.value = prev;
+    } catch (_) {}
   }
 
   function renderStyleCards() {
@@ -159,6 +201,22 @@
 
     previewScreen.className = `phone-screen mode-${state.cropMode}`;
     liveSubBox.className = `live-sub-box pos-${subPosition.value}`;
+    previewSplitCam.classList.toggle('hidden', state.cropMode !== 'split_stream');
+    previewCenterLabel.textContent =
+      state.cropMode === 'split_stream'
+        ? '🎮 ГЕЙМПЛЕЙ / ЭКРАН'
+        : state.cropMode === 'face_track'
+        ? '🤖 AI FACE TRACK 9:16'
+        : '9:16 HD 1080×1920';
+
+    const wm = (watermarkInput.value || '').trim();
+    if (wm) {
+      previewWatermark.textContent = wm;
+      previewWatermark.classList.remove('hidden');
+    } else {
+      previewWatermark.classList.add('hidden');
+    }
+    previewHookBanner.classList.toggle('hidden', !hookBannerToggle.checked);
 
     const sizePx = fontSize.value === 'small' ? 16 : fontSize.value === 'large' ? 23 : 19;
     const isUpper = uppercaseToggle.checked;
@@ -262,8 +320,9 @@
     readyBadges.innerHTML = '';
     if (job.source_type === 'url') {
       const bList = ['⚡ Без скачивания всего видео'];
-      if (m.has_heatmap) bList.push('📈 Карта пересмотров YouTube');
-      if (m.has_captions) bList.push('💬 Субтитры найдены');
+      if (m.has_twitch_chat) bList.push('💬 Пики чата Twitch');
+      else if (m.has_heatmap) bList.push('📈 Карта пересмотров YouTube');
+      if (m.has_captions) bList.push('📝 Субтитры найдены');
       bList.forEach((txt) => {
         const sp = document.createElement('span');
         sp.className = 'mini-pill';
@@ -368,8 +427,12 @@
     btn.addEventListener('click', () => {
       state.cropMode = btn.dataset.value;
       cropModeGroup.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      splitStreamSettings.classList.toggle('hidden', state.cropMode !== 'split_stream');
       updateLivePreview();
     });
+  });
+  webcamSize.addEventListener('input', () => {
+    webcamSizeVal.textContent = `${webcamSize.value}%`;
   });
   fontSelect.addEventListener('change', () => {
     state.selectedFont = fontSelect.value;
@@ -378,6 +441,30 @@
   fontSize.addEventListener('change', updateLivePreview);
   subPosition.addEventListener('change', updateLivePreview);
   uppercaseToggle.addEventListener('change', updateLivePreview);
+  hookBannerToggle.addEventListener('change', updateLivePreview);
+  watermarkInput.addEventListener('input', updateLivePreview);
+
+  btnUploadMusic.addEventListener('click', () => musicFileInput.click());
+  musicFileInput.addEventListener('change', async () => {
+    const file = musicFileInput.files && musicFileInput.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    btnUploadMusic.disabled = true;
+    try {
+      const res = await fetch('/api/music', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки трека');
+      await refreshMusicList();
+      bgMusicSelect.value = data.id;
+      showToast(`Трек «${data.name}» добавлен!`);
+    } catch (err) {
+      showToast(err.message || 'Ошибка загрузки музыки');
+    } finally {
+      btnUploadMusic.disabled = false;
+      musicFileInput.value = '';
+    }
+  });
 
   function getCurrentOptions() {
     return {
@@ -391,6 +478,14 @@
       crop_mode: state.cropMode,
       position: subPosition.value,
       uppercase: uppercaseToggle.checked,
+      webcam_corner: webcamCorner.value,
+      webcam_size: (parseInt(webcamSize.value, 10) || 28) / 100.0,
+      show_hook_banner: hookBannerToggle.checked,
+      watermark_text: (watermarkInput.value || '').trim() || null,
+      watermark_opacity: 0.55,
+      jump_cuts: jumpCutsToggle.checked,
+      bg_music_id: bgMusicSelect.value || null,
+      bg_music_volume: 0.18,
     };
   }
 
@@ -479,9 +574,76 @@
     }
   }
 
+  let editingContext = null;
+
+  function openClipEditor(job, clip, card) {
+    editingContext = { job, clip, card };
+    editHookInput.value = clip.hook_text || clip.title || '';
+    editTrimStart.value = clip.trim_start != null ? clip.trim_start : (job.source_type === 'url' ? 0 : clip.start);
+    editTrimEnd.value = clip.trim_end != null ? clip.trim_end : (job.source_type === 'url' ? clip.duration : clip.end);
+    editTranscriptInput.value = clip.transcript || '';
+    clipEditorModal.classList.remove('hidden');
+  }
+
+  function closeClipEditor() {
+    clipEditorModal.classList.add('hidden');
+    editingContext = null;
+  }
+
+  btnCloseEditor.addEventListener('click', closeClipEditor);
+  btnCancelEditor.addEventListener('click', closeClipEditor);
+  editorBackdrop.addEventListener('click', closeClipEditor);
+
+  btnSaveEditor.addEventListener('click', async () => {
+    if (!editingContext) return;
+    const { job, clip, card } = editingContext;
+    btnSaveEditor.disabled = true;
+    btnSaveEditor.textContent = '⏳ Перерендер...';
+    try {
+      const opts = getCurrentOptions();
+      const res = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/rerender`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...opts,
+          edited_transcript: editTranscriptInput.value,
+          edited_hook_text: editHookInput.value,
+          trim_start: parseFloat(editTrimStart.value),
+          trim_end: parseFloat(editTrimEnd.value),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Ошибка сохранения');
+      }
+      const updated = await res.json();
+      Object.assign(clip, updated);
+      const vid = card.querySelector('video');
+      const nv = updated.version || Date.now();
+      vid.poster = `/api/jobs/${job.job_id}/clips/${clip.id}/thumb?v=${nv}`;
+      vid.src = `/api/jobs/${job.job_id}/clips/${clip.id}/video?v=${nv}`;
+      vid.load();
+      card.querySelector('.clip-title').textContent = updated.title || clip.id;
+      card.querySelector('.clip-transcript').textContent = updated.transcript || 'Без речи';
+      closeClipEditor();
+      showToast('Клип перерендерен с вашими правками!');
+    } catch (err) {
+      showToast(err.message || 'Ошибка перерендера');
+    } finally {
+      btnSaveEditor.disabled = false;
+      btnSaveEditor.textContent = '💾 Сохранить и перерендерить';
+    }
+  });
+
   function renderClips(job) {
     resultsSection.classList.remove('hidden');
     resultsMeta.textContent = `Проект: ${job.original_filename} • Клипов: ${job.clips.length} • Распознано слов: ${job.words_count || 0}`;
+    if (job.clips.length > 0) {
+      btnDownloadAllZip.href = `/api/jobs/${job.job_id}/download-all`;
+      btnDownloadAllZip.classList.remove('hidden');
+    } else {
+      btnDownloadAllZip.classList.add('hidden');
+    }
     clipsGrid.innerHTML = '';
 
     job.clips.forEach((clip) => {
@@ -508,10 +670,24 @@
           <div class="clip-transcript">${escapeHtml(clip.transcript || 'Без речи')}</div>
           <div class="clip-actions">
             <a class="btn btn-primary btn-sm" href="${dlUrl}" download>⬇ Скачать MP4</a>
-            <button type="button" class="btn btn-secondary btn-sm btn-rerender">🎨 Новый стиль</button>
+            <button type="button" class="btn btn-secondary btn-sm btn-edit">✏️ Редактор</button>
+            <button type="button" class="btn btn-ghost btn-sm btn-rerender">🎨 Новый стиль</button>
+            <button type="button" class="btn btn-ghost btn-sm btn-copy-cap">📋 Описание</button>
           </div>
         </div>
       `;
+
+      card.querySelector('.btn-edit').addEventListener('click', () => openClipEditor(job, clip, card));
+
+      card.querySelector('.btn-copy-cap').addEventListener('click', async () => {
+        const txt = clip.tiktok_caption || `${clip.title}\n\n#нарезки #тикток #shorts`;
+        try {
+          await navigator.clipboard.writeText(txt);
+          showToast('Описание и хэштеги скопированы!');
+        } catch (_) {
+          showToast('Не удалось скопировать в буфер');
+        }
+      });
 
       const btnRe = card.querySelector('.btn-rerender');
       btnRe.addEventListener('click', async () => {
@@ -522,23 +698,17 @@
           const res = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/rerender`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              subtitle_style: opts.subtitle_style,
-              font_id: opts.font_id,
-              font_size: opts.font_size,
-              crop_mode: opts.crop_mode,
-              position: opts.position,
-              uppercase: opts.uppercase,
-            }),
+            body: JSON.stringify(opts),
           });
           if (!res.ok) throw new Error('Не удалось перерендерить');
           const updated = await res.json();
+          Object.assign(clip, updated);
           const vid = card.querySelector('video');
           const nv = updated.version || Date.now();
           vid.poster = `/api/jobs/${job.job_id}/clips/${clip.id}/thumb?v=${nv}`;
           vid.src = `/api/jobs/${job.job_id}/clips/${clip.id}/video?v=${nv}`;
           vid.load();
-          showToast('Клип обновлён с новым стилем субтитров!');
+          showToast('Клип обновлён с новым стилем и настройками!');
         } catch (err) {
           showToast(err.message || 'Ошибка перерендера');
         } finally {

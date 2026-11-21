@@ -10,6 +10,7 @@ import yt_dlp
 from yt_dlp.utils import download_range_func
 
 from backend.highlights import RUSSIAN_HOOK_WORDS, RUSSIAN_OPENER_WORDS, _make_clip_title
+from backend.twitch_chat import analyze_twitch_chat_peaks, extract_twitch_vod_id
 
 
 def probe_remote_url(url: str) -> Dict[str, Any]:
@@ -40,12 +41,24 @@ def probe_remote_url(url: str) -> Dict[str, Any]:
     fps = float(info.get("fps") or 30.0)
     heatmap = info.get("heatmap") or []
     chapters = info.get("chapters") or []
+    has_twitch_chat = False
+
+    # For Twitch VODs without YouTube heatmap, analyze Twitch Chat Replay bursts!
+    webpage_url = info.get("webpage_url") or url
+    if not heatmap and extract_twitch_vod_id(webpage_url):
+        try:
+            chat_peaks = analyze_twitch_chat_peaks(webpage_url, duration)
+            if chat_peaks:
+                heatmap = chat_peaks
+                has_twitch_chat = True
+        except Exception:
+            pass
 
     # Check available Russian captions (manual first, then auto-captions)
     caption_info = _pick_caption_track(info)
 
     return {
-        "url": info.get("webpage_url") or url,
+        "url": webpage_url,
         "title": info.get("title") or "Видео по ссылке",
         "uploader": info.get("uploader") or info.get("channel") or "",
         "extractor": info.get("extractor_key") or info.get("extractor") or "remote",
@@ -56,6 +69,7 @@ def probe_remote_url(url: str) -> Dict[str, Any]:
         "fps": round(fps, 2),
         "has_audio": True,
         "has_heatmap": len(heatmap) > 0,
+        "has_twitch_chat": has_twitch_chat,
         "heatmap": heatmap,
         "chapters": chapters,
         "has_captions": caption_info is not None,
@@ -293,10 +307,15 @@ def find_remote_highlights(
                 if e - s < min_duration * 0.7:
                     continue
                 val = float(h.get("value", 0.5))
+                is_tw = h.get("source") == "twitch_chat"
                 sc = {
                     "viral_score": int(round(min(99, 55 + val * 44))),
                     "raw_total": val,
-                    "tags": ["📈 Пик пересмотров", "🔥 Топ момент стрима"],
+                    "tags": (
+                        ["💬 Взрыв чата Twitch", "🔥 Топ момент стрима"]
+                        if is_tw
+                        else ["📈 Пик пересмотров", "🔥 Топ момент стрима"]
+                    ),
                 }
                 candidates.append(
                     {
@@ -426,7 +445,8 @@ def _score_remote_window(
 
     tags: List[str] = []
     if heatmap and hm_score >= 0.55:
-        tags.append("📈 Пик пересмотров")
+        is_tw = any(h.get("source") == "twitch_chat" for h in heatmap[:3])
+        tags.append("💬 Взрыв чата Twitch" if is_tw else "📈 Пик пересмотров")
     if ling_score >= 0.56:
         tags.append("💬 Сильный хук")
     if speech_score >= 0.72:

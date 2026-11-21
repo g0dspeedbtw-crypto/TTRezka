@@ -2,8 +2,9 @@
 import re
 import shutil
 import uuid
+import zipfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -14,6 +15,7 @@ from backend.config import (
     BASE_DIR,
     FONTS_DIR,
     JOBS_DIR,
+    MUSIC_DIR,
     STATIC_DIR,
     UPLOADS_DIR,
     get_available_fonts,
@@ -53,6 +55,14 @@ class ProcessRequest(BaseModel):
     crop_mode: str = Field(default="fill")
     position: str = Field(default="lower_third")
     uppercase: Optional[bool] = Field(default=None)
+    webcam_corner: str = Field(default="bottom_left")
+    webcam_size: float = Field(default=0.28, ge=0.18, le=0.45)
+    show_hook_banner: bool = Field(default=False)
+    watermark_text: Optional[str] = Field(default=None)
+    watermark_opacity: float = Field(default=0.55, ge=0.15, le=1.0)
+    jump_cuts: bool = Field(default=False)
+    bg_music_id: Optional[str] = Field(default=None)
+    bg_music_volume: float = Field(default=0.18, ge=0.05, le=0.5)
 
 
 class RerenderRequest(BaseModel):
@@ -62,6 +72,18 @@ class RerenderRequest(BaseModel):
     crop_mode: str = Field(default="fill")
     position: str = Field(default="lower_third")
     uppercase: Optional[bool] = Field(default=None)
+    webcam_corner: str = Field(default="bottom_left")
+    webcam_size: float = Field(default=0.28, ge=0.18, le=0.45)
+    show_hook_banner: bool = Field(default=False)
+    watermark_text: Optional[str] = Field(default=None)
+    watermark_opacity: float = Field(default=0.55, ge=0.15, le=1.0)
+    jump_cuts: bool = Field(default=False)
+    bg_music_id: Optional[str] = Field(default=None)
+    bg_music_volume: float = Field(default=0.18, ge=0.05, le=0.5)
+    edited_transcript: Optional[str] = Field(default=None)
+    edited_hook_text: Optional[str] = Field(default=None)
+    trim_start: Optional[float] = Field(default=None)
+    trim_end: Optional[float] = Field(default=None)
 
 
 class ProbeUrlRequest(BaseModel):
@@ -195,6 +217,7 @@ def api_probe_url(req: ProbeUrlRequest) -> Dict[str, Any]:
         "extractor": info["extractor"],
         "thumbnail": info["thumbnail"],
         "has_heatmap": info["has_heatmap"],
+        "has_twitch_chat": info.get("has_twitch_chat", False),
         "has_captions": info["has_captions"],
     }
     job = create_job(
@@ -271,18 +294,75 @@ def api_clip_download(job_id: str, clip_id: str) -> FileResponse:
     )
 
 
+@app.get("/api/music")
+def api_list_music() -> Dict[str, Any]:
+    tracks: List[Dict[str, Any]] = []
+    for p in sorted(MUSIC_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.suffix.lower() in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
+            tracks.append({"id": p.name, "name": p.stem})
+    return {"tracks": tracks}
+
+
+@app.post("/api/music")
+async def api_upload_music(file: UploadFile = File(...)) -> Dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Аудиофайл не выбран")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
+        raise HTTPException(status_code=400, detail="Поддерживаются форматы: MP3, WAV, M4A, OGG")
+    safe_stem = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ _-]+", "", Path(file.filename).stem).strip()[:40] or "track"
+    fname = f"{safe_stem}_{uuid.uuid4().hex[:6]}{ext}"
+    dest = MUSIC_DIR / fname
+    with dest.open("wb") as out:
+        while True:
+            chunk = await file.read(512 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    return {"id": fname, "name": safe_stem}
+
+
+@app.get("/api/jobs/{job_id}/download-all")
+def api_download_all_clips(job_id: str) -> FileResponse:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор")
+    job = get_job(job_id)
+    if not job or not job.get("clips"):
+        raise HTTPException(status_code=404, detail="Клипы не найдены")
+
+    jdir = JOBS_DIR / job_id
+    zip_path = jdir / f"tikcut_{job_id}_all_clips.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+        for idx, c in enumerate(job["clips"], start=1):
+            mp4 = jdir / f"{c['id']}.mp4"
+            if mp4.exists():
+                zf.write(mp4, arcname=f"clip_{idx}_score{c.get('viral_score', 0)}_9x16.mp4")
+        # Also include a ready-to-paste captions.txt file!
+        captions_lines = []
+        for idx, c in enumerate(job["clips"], start=1):
+            captions_lines.append(f"=== КЛИП #{idx}: {c.get('title', '')} ===")
+            captions_lines.append(c.get("tiktok_caption", ""))
+            captions_lines.append("")
+        zf.writestr("captions_and_hashtags.txt", "\n".join(captions_lines))
+
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename=f"tikcut_{job_id}_all_clips.zip",
+    )
+
+
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/rerender")
 def api_rerender_clip(job_id: str, clip_id: str, req: RerenderRequest) -> Dict[str, Any]:
     try:
         updated = rerender_single_clip(
             job_id=job_id,
             clip_id=clip_id,
-            style_id=req.subtitle_style,
-            font_id=req.font_id,
-            font_size=req.font_size,
-            crop_mode=req.crop_mode,
-            position=req.position,
-            uppercase=req.uppercase,
+            options=req.model_dump(),
+            edited_transcript=req.edited_transcript,
+            edited_hook_text=req.edited_hook_text,
+            trim_start=req.trim_start,
+            trim_end=req.trim_end,
         )
         return updated
     except ValueError as exc:

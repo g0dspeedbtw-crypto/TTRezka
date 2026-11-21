@@ -46,6 +46,8 @@ def main() -> None:
         "onnxruntime",
         "--collect-all",
         "yt_dlp",
+        "--collect-all",
+        "cv2",
         "--hidden-import",
         "uvicorn.logging",
         "--hidden-import",

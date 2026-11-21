@@ -6,7 +6,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from backend.config import JOBS_DIR
+from backend.config import JOBS_DIR, MUSIC_DIR
 from backend.highlights import _make_clip_title, find_highlights
 from backend.remote import (
     download_clip_segment,
@@ -15,6 +15,7 @@ from backend.remote import (
 )
 from backend.renderer import probe_video, render_clip
 from backend.transcriber import extract_audio_wav, transcribe_russian
+from backend.twitch_chat import generate_tiktok_caption
 
 _LOCK = threading.Lock()
 _JOBS: Dict[str, Dict[str, Any]] = {}
@@ -35,6 +36,13 @@ def _save_job(job: Dict[str, Any]) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def _resolve_music_path(bg_music_id: Optional[str]) -> Optional[Path]:
+    if not bg_music_id:
+        return None
+    p = MUSIC_DIR / Path(bg_music_id).name
+    return p if p.exists() else None
 
 
 def load_existing_jobs() -> None:
@@ -89,7 +97,6 @@ def create_job(
         "words_count": 0,
     }
     if remote_meta is not None:
-        # Save full remote metadata (including heatmap/caption track) separately to keep state.json light
         (_job_dir(job_id) / "remote_meta.json").write_text(
             json.dumps(remote_meta, ensure_ascii=False),
             encoding="utf-8",
@@ -149,14 +156,27 @@ def start_processing(job_id: str, options: Dict[str, Any]) -> None:
     thread.start()
 
 
+def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str, Any]:
+    show_hook = bool(options.get("show_hook_banner", False))
+    return {
+        "style_id": options.get("subtitle_style", "hormozi"),
+        "font_id": options.get("font_id", "montserrat"),
+        "font_size": options.get("font_size", "medium"),
+        "crop_mode": options.get("crop_mode", "fill"),
+        "position": options.get("position", "lower_third"),
+        "uppercase": options.get("uppercase", None),
+        "webcam_corner": options.get("webcam_corner", "bottom_left"),
+        "webcam_size": float(options.get("webcam_size", 0.28)),
+        "hook_text": hook_title if show_hook else None,
+        "watermark_text": (options.get("watermark_text") or "").strip() or None,
+        "watermark_opacity": float(options.get("watermark_opacity", 0.55)),
+        "jump_cuts": bool(options.get("jump_cuts", False)),
+        "bg_music_path": _resolve_music_path(options.get("bg_music_id")),
+        "bg_music_volume": float(options.get("bg_music_volume", 0.18)),
+    }
+
+
 def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
-    """
-    Zero-full-download pipeline for YouTube videos & Twitch/YouTube past streams:
-    1. Fetch lightweight captions + heatmap (KB, not GB)
-    2. AI-score and select top N highlights across the whole stream in ~2s
-    3. Surgically download ONLY the chosen 20-55s segments
-    4. Run fast local Whisper on each short clip for exact word timestamps & render 9:16
-    """
     try:
         job = get_job(job_id)
         if not job:
@@ -164,10 +184,8 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
 
         jdir = _job_dir(job_id)
         remote_url = job["remote_url"]
-        remote_meta_path = jdir / "remote_meta.json"
-        remote_meta = json.loads(remote_meta_path.read_text(encoding="utf-8"))
+        remote_meta = json.loads((jdir / "remote_meta.json").read_text(encoding="utf-8"))
 
-        # Stage 1: Fetch lightweight captions without downloading video (5% -> 22%)
         _update_job(
             job_id,
             stage="transcribing",
@@ -187,11 +205,10 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             message=(
                 f"Получен транскрипт ({len(words)} слов) без скачивания видео"
                 if words
-                else "Субтитры на платформе не найдены — анализ по карте пересмотров и структуре..."
+                else "Анализ по карте пересмотров / пикам чата стрима..."
             ),
         )
 
-        # Stage 2: Analyze full video/stream & pick top highlights (22% -> 40%)
         clip_count = int(options.get("clip_count", 5))
         min_dur = float(options.get("min_duration", 20))
         max_dur = float(options.get("max_duration", 55))
@@ -209,15 +226,7 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             progress_cb=on_hl,
         )
 
-        # Stage 3: Surgically download ONLY each selected clip + Whisper + 9:16 render (40% -> 100%)
         whisper_model = options.get("whisper_model", "small")
-        style_id = options.get("subtitle_style", "hormozi")
-        font_id = options.get("font_id", "montserrat")
-        font_size = options.get("font_size", "medium")
-        crop_mode = options.get("crop_mode", "fill")
-        position = options.get("position", "lower_third")
-        uppercase = options.get("uppercase", None)
-
         rendered_clips: List[Dict[str, Any]] = []
         n_total = max(1, len(highlights))
         total_recognized_words = len(words)
@@ -234,17 +243,15 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 message=f"Клип {idx + 1}/{n_total}: загрузка только фрагмента ({int(hl['duration'])} сек)...",
             )
 
-            raw_seg_path = jdir / f"raw_{clip_id}.mp4"
             raw_seg_path = download_clip_segment(
                 url=remote_url,
                 start=hl["start"],
                 end=hl["end"],
-                output_mp4=raw_seg_path,
+                output_mp4=jdir / f"raw_{clip_id}.mp4",
             )
             seg_meta = probe_video(raw_seg_path)
             seg_dur = float(seg_meta.get("duration") or hl["duration"])
 
-            # Run fast local Whisper on ONLY this short 20-55s clip for razor-sharp Russian word timing!
             _update_job(
                 job_id,
                 stage="rendering",
@@ -265,15 +272,21 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             if not words:
                 total_recognized_words += len(clip_words)
 
-            # Render final 9:16 MP4 with TikTok subtitles
+            transcript_txt = " ".join(s["text"] for s in clip_segs).strip() or hl.get("transcript", "")
+            clip_title = hl.get("title") or _make_clip_title(transcript_txt, idx + 1)
+            if not hl.get("transcript") and transcript_txt:
+                clip_title = _make_clip_title(transcript_txt, idx + 1)
+
             _update_job(
                 job_id,
                 stage="rendering",
                 progress=int(base_pct + step_span * 0.68),
-                message=f"Клип {idx + 1}/{n_total}: рендер 9:16 + вшивание субтитров...",
+                message=f"Клип {idx + 1}/{n_total}: рендер 9:16 + эффекты и субтитры...",
             )
             out_mp4 = jdir / f"{clip_id}.mp4"
             out_thumb = jdir / f"{clip_id}.jpg"
+            r_kwargs = _extract_render_kwargs(options, clip_title)
+
             render_clip(
                 source_video=raw_seg_path,
                 output_mp4=out_mp4,
@@ -281,26 +294,20 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 clip_start=0.0,
                 clip_end=seg_dur,
                 words=clip_words,
-                style_id=style_id,
-                font_id=font_id,
-                font_size=font_size,
-                crop_mode=crop_mode,
-                position=position,
-                uppercase=uppercase,
+                **r_kwargs,
             )
 
-            transcript_txt = " ".join(s["text"] for s in clip_segs).strip() or hl.get("transcript", "")
             hl_out = dict(hl)
+            hl_out["title"] = clip_title
+            hl_out["hook_text"] = clip_title
             hl_out["transcript"] = transcript_txt
-            if not hl.get("transcript") and transcript_txt:
-                hl_out["title"] = _make_clip_title(transcript_txt, idx + 1)
+            hl_out["tiktok_caption"] = generate_tiktok_caption(
+                clip_title, transcript_txt, hl.get("tags"), job.get("original_filename", "")
+            )
             hl_out["raw_segment_path"] = str(raw_seg_path)
             hl_out["raw_segment_duration"] = round(seg_dur, 2)
-            hl_out["style_id"] = style_id
-            hl_out["font_id"] = font_id
-            hl_out["font_size"] = font_size
-            hl_out["crop_mode"] = crop_mode
-            hl_out["position"] = position
+            hl_out["trim_start"] = 0.0
+            hl_out["trim_end"] = round(seg_dur, 2)
             hl_out["version"] = int(time.time())
             hl_out["file_size_mb"] = round(out_mp4.stat().st_size / (1024 * 1024), 2)
             rendered_clips.append(hl_out)
@@ -339,7 +346,6 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         wav_path = jdir / "audio.wav"
         words_path = jdir / "words.json"
 
-        # Stage 1: Extract audio (0% -> 10%)
         if not wav_path.exists():
             _update_job(
                 job_id,
@@ -349,7 +355,6 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             )
             extract_audio_wav(video_path, wav_path)
 
-        # Stage 2: Russian Speech Recognition via faster-whisper (10% -> 52%)
         whisper_model = options.get("whisper_model", "small")
         _update_job(
             job_id,
@@ -374,7 +379,6 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         )
         _update_job(job_id, words_count=len(words))
 
-        # Stage 3: Local Highlight Detection (52% -> 68%)
         clip_count = int(options.get("clip_count", 5))
         min_dur = float(options.get("min_duration", 20))
         max_dur = float(options.get("max_duration", 55))
@@ -395,14 +399,6 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             progress_cb=on_highlights,
         )
 
-        # Stage 4: Render 9:16 Clips with Styled Subtitles (68% -> 100%)
-        style_id = options.get("subtitle_style", "hormozi")
-        font_id = options.get("font_id", "montserrat")
-        font_size = options.get("font_size", "medium")
-        crop_mode = options.get("crop_mode", "fill")
-        position = options.get("position", "lower_third")
-        uppercase = options.get("uppercase", None)
-
         rendered_clips: List[Dict[str, Any]] = []
         n_total = max(1, len(highlights))
         for idx, hl in enumerate(highlights):
@@ -411,11 +407,12 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 job_id,
                 stage="rendering",
                 progress=pct,
-                message=f"Рендеринг клипа {idx + 1} из {n_total} (9:16 + авто-субтитры)...",
+                message=f"Рендеринг клипа {idx + 1} из {n_total} (9:16 + эффекты и субтитры)...",
             )
             clip_id = hl["id"]
             out_mp4 = jdir / f"{clip_id}.mp4"
             out_thumb = jdir / f"{clip_id}.jpg"
+            r_kwargs = _extract_render_kwargs(options, hl["title"])
 
             render_clip(
                 source_video=video_path,
@@ -424,20 +421,16 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 clip_start=hl["start"],
                 clip_end=hl["end"],
                 words=words,
-                style_id=style_id,
-                font_id=font_id,
-                font_size=font_size,
-                crop_mode=crop_mode,
-                position=position,
-                uppercase=uppercase,
+                **r_kwargs,
             )
 
             hl_out = dict(hl)
-            hl_out["style_id"] = style_id
-            hl_out["font_id"] = font_id
-            hl_out["font_size"] = font_size
-            hl_out["crop_mode"] = crop_mode
-            hl_out["position"] = position
+            hl_out["hook_text"] = hl["title"]
+            hl_out["tiktok_caption"] = generate_tiktok_caption(
+                hl["title"], hl.get("transcript", ""), hl.get("tags"), job.get("original_filename", "")
+            )
+            hl_out["trim_start"] = hl["start"]
+            hl_out["trim_end"] = hl["end"]
             hl_out["version"] = int(time.time())
             hl_out["file_size_mb"] = round(out_mp4.stat().st_size / (1024 * 1024), 2)
             rendered_clips.append(hl_out)
@@ -462,17 +455,64 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         )
 
 
+def _realign_edited_words(
+    orig_words: List[Dict[str, Any]],
+    new_transcript: str,
+    clip_start: float,
+    clip_end: float,
+) -> List[Dict[str, Any]]:
+    """
+    Map user-edited Russian subtitle text back onto the original word timestamps
+    so fixing typos/streamer names keeps smooth karaoke timing!
+    """
+    new_tokens = [t.strip() for t in new_transcript.split() if t.strip()]
+    if not new_tokens:
+        return []
+
+    in_range = [w for w in orig_words if w["end"] > clip_start and w["start"] < clip_end]
+    if not in_range:
+        dur = max(0.5, clip_end - clip_start)
+        step = dur / len(new_tokens)
+        return [
+            {
+                "word": tok,
+                "start": round(clip_start + i * step, 3),
+                "end": round(clip_start + (i + 1) * step, 3),
+            }
+            for i, tok in enumerate(new_tokens)
+        ]
+
+    # Proportional alignment across the original speech span
+    t0 = in_range[0]["start"]
+    t1 = in_range[-1]["end"]
+    if len(new_tokens) == len(in_range):
+        return [
+            {"word": tok, "start": orig["start"], "end": orig["end"]}
+            for tok, orig in zip(new_tokens, in_range)
+        ]
+
+    span = max(0.3, t1 - t0)
+    step = span / len(new_tokens)
+    return [
+        {
+            "word": tok,
+            "start": round(t0 + i * step, 3),
+            "end": round(t0 + (i + 1) * step, 3),
+        }
+        for i, tok in enumerate(new_tokens)
+    ]
+
+
 def rerender_single_clip(
     job_id: str,
     clip_id: str,
-    style_id: str,
-    font_id: str,
-    font_size: str,
-    crop_mode: str,
-    position: str,
-    uppercase: Optional[bool] = None,
+    options: Dict[str, Any],
+    edited_transcript: Optional[str] = None,
+    edited_hook_text: Optional[str] = None,
+    trim_start: Optional[float] = None,
+    trim_end: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Re-render a single clip with updated subtitle style/font/crop without re-transcribing."""
+    """Re-render a single clip with updated style/crop/trim/edited subtitles without re-transcribing."""
     job = get_job(job_id)
     if not job:
         raise ValueError("Проект не найден")
@@ -484,59 +524,74 @@ def rerender_single_clip(
 
     out_mp4 = jdir / f"{clip_id}.mp4"
     out_thumb = jdir / f"{clip_id}.jpg"
+    is_url = job.get("source_type") == "url"
 
-    if job.get("source_type") == "url":
-        raw_seg = Path(target_clip.get("raw_segment_path") or (jdir / f"raw_{clip_id}.mp4"))
+    if is_url:
+        source_video = Path(target_clip.get("raw_segment_path") or (jdir / f"raw_{clip_id}.mp4"))
         clip_words_path = jdir / f"{clip_id}_words.json"
-        if not raw_seg.exists() or not clip_words_path.exists():
+        if not source_video.exists() or not clip_words_path.exists():
             raise ValueError("Исходный фрагмент клипа не найден")
         words = json.loads(clip_words_path.read_text(encoding="utf-8")).get("words", [])
-        seg_dur = float(target_clip.get("raw_segment_duration") or target_clip["duration"])
-        render_clip(
-            source_video=raw_seg,
-            output_mp4=out_mp4,
-            thumb_jpg=out_thumb,
-            clip_start=0.0,
-            clip_end=seg_dur,
-            words=words,
-            style_id=style_id,
-            font_id=font_id,
-            font_size=font_size,
-            crop_mode=crop_mode,
-            position=position,
-            uppercase=uppercase,
-        )
+        max_len = float(target_clip.get("raw_segment_duration") or target_clip["duration"])
+        c_start = max(0.0, float(trim_start if trim_start is not None else target_clip.get("trim_start", 0.0)))
+        c_end = min(max_len, float(trim_end if trim_end is not None else target_clip.get("trim_end", max_len)))
     else:
         words_path = jdir / "words.json"
         if not words_path.exists():
             raise ValueError("Таймкоды субтитров не найдены")
         words = json.loads(words_path.read_text(encoding="utf-8")).get("words", [])
-        video_path = Path(job["video_path"])
-        render_clip(
-            source_video=video_path,
-            output_mp4=out_mp4,
-            thumb_jpg=out_thumb,
-            clip_start=target_clip["start"],
-            clip_end=target_clip["end"],
-            words=words,
-            style_id=style_id,
-            font_id=font_id,
-            font_size=font_size,
-            crop_mode=crop_mode,
-            position=position,
-            uppercase=uppercase,
-        )
+        source_video = Path(job["video_path"])
+        total_dur = float(job["video_meta"].get("duration") or target_clip["end"])
+        c_start = max(0.0, float(trim_start if trim_start is not None else target_clip.get("trim_start", target_clip["start"])))
+        c_end = min(total_dur, float(trim_end if trim_end is not None else target_clip.get("trim_end", target_clip["end"])))
+
+    if c_end - c_start < 2.0:
+        c_end = c_start + 2.0
+
+    # Apply user-edited subtitle text if provided
+    custom_words_path = jdir / f"{clip_id}_custom_words.json"
+    if edited_transcript is not None:
+        words_to_use = _realign_edited_words(words, edited_transcript, c_start, c_end)
+        custom_words_path.write_text(json.dumps(words_to_use, ensure_ascii=False), encoding="utf-8")
+    elif custom_words_path.exists():
+        words_to_use = json.loads(custom_words_path.read_text(encoding="utf-8"))
+    else:
+        words_to_use = words
+
+    hook_title = (
+        edited_hook_text
+        if edited_hook_text is not None
+        else target_clip.get("hook_text") or target_clip.get("title") or ""
+    )
+    r_kwargs = _extract_render_kwargs(options, hook_title)
+
+    render_clip(
+        source_video=source_video,
+        output_mp4=out_mp4,
+        thumb_jpg=out_thumb,
+        clip_start=c_start,
+        clip_end=c_end,
+        words=words_to_use,
+        **r_kwargs,
+    )
 
     updated_clip: Dict[str, Any] = {}
     with _LOCK:
         live_job = _JOBS[job_id]
         for c in live_job["clips"]:
             if c["id"] == clip_id:
-                c["style_id"] = style_id
-                c["font_id"] = font_id
-                c["font_size"] = font_size
-                c["crop_mode"] = crop_mode
-                c["position"] = position
+                if edited_transcript is not None:
+                    c["transcript"] = edited_transcript.strip()
+                if edited_hook_text is not None:
+                    c["hook_text"] = edited_hook_text.strip()
+                    if edited_hook_text.strip():
+                        c["title"] = edited_hook_text.strip()
+                c["trim_start"] = round(c_start, 2)
+                c["trim_end"] = round(c_end, 2)
+                c["duration"] = round(c_end - c_start, 2)
+                c["tiktok_caption"] = generate_tiktok_caption(
+                    c.get("title", ""), c.get("transcript", ""), c.get("tags"), live_job.get("original_filename", "")
+                )
                 c["version"] = int(time.time())
                 c["file_size_mb"] = round(out_mp4.stat().st_size / (1024 * 1024), 2)
                 updated_clip = dict(c)
