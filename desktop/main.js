@@ -68,39 +68,66 @@ function setupAutoUpdater() {
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('checking-for-update', () => {
-    sendUpdateStatus({ state: 'checking', message: 'Проверка обновлений...' });
+    sendUpdateStatus({
+      state: 'checking',
+      currentVersion: app.getVersion(),
+      message: 'Проверка обновлений на GitHub...',
+    });
   });
 
-  autoUpdater.on('update-available', (info) => {
+  autoUpdater.on('update-available', async (info) => {
+    let notes = '';
+    if (typeof info.releaseNotes === 'string') {
+      notes = info.releaseNotes;
+    } else if (Array.isArray(info.releaseNotes)) {
+      notes = info.releaseNotes.map((n) => n.note || '').join('\n');
+    }
+    if (!notes) {
+      try {
+        const rel = await fetchLatestGithubRelease();
+        if (rel && rel.body) notes = rel.body;
+      } catch (_) {}
+    }
     sendUpdateStatus({
       state: 'available',
+      currentVersion: app.getVersion(),
       version: info.version,
-      message: `Найдено обновление v${info.version} — начинаем загрузку...`,
+      releaseNotes: notes,
+      message: `Доступна новая версия v${info.version} — начинаем загрузку...`,
     });
   });
 
   autoUpdater.on('update-not-available', (info) => {
     sendUpdateStatus({
       state: 'up-to-date',
+      currentVersion: app.getVersion(),
       version: info?.version || app.getVersion(),
-      message: `Установлена последняя версия (v${app.getVersion()})`,
+      message: `У вас установлена последняя версия v${app.getVersion()}`,
     });
   });
 
   autoUpdater.on('download-progress', (prog) => {
     const pct = Math.round(prog.percent || 0);
+    const speedMb = ((prog.bytesPerSecond || 0) / (1024 * 1024)).toFixed(1);
+    const doneMb = ((prog.transferred || 0) / (1024 * 1024)).toFixed(1);
+    const totalMb = ((prog.total || 0) / (1024 * 1024)).toFixed(1);
     sendUpdateStatus({
       state: 'downloading',
+      currentVersion: app.getVersion(),
       percent: pct,
-      message: `Скачивание обновления: ${pct}%`,
+      speedMb,
+      doneMb,
+      totalMb,
+      message: `Загрузка обновления: ${pct}% (${doneMb} / ${totalMb} МБ • ${speedMb} МБ/с)`,
     });
   });
 
   autoUpdater.on('update-downloaded', (info) => {
     sendUpdateStatus({
       state: 'downloaded',
+      currentVersion: app.getVersion(),
       version: info.version,
-      message: `Обновление v${info.version} готово к установке!`,
+      message: `Обновление v${info.version} загружено и готово к установке!`,
     });
   });
 
@@ -111,22 +138,37 @@ function setupAutoUpdater() {
       if (rel && rel.tag_name && compareSemver(rel.tag_name, app.getVersion()) > 0) {
         const ver = rel.tag_name.replace(/^v/, '');
         latestFallbackUrl = rel.html_url || RELEASES_URL;
+        // Try to pick direct .dmg (mac) or Setup.exe (win) download link
+        const assets = rel.assets || [];
+        const directAsset = assets.find((a) => {
+          const n = (a.name || '').toLowerCase();
+          if (process.platform === 'darwin') return n.endsWith('.dmg');
+          if (process.platform === 'win32') return n.includes('setup') && n.endsWith('.exe');
+          return false;
+        });
+        if (directAsset && directAsset.browser_download_url) {
+          latestFallbackUrl = directAsset.browser_download_url;
+        }
         sendUpdateStatus({
           state: 'manual-download',
+          currentVersion: app.getVersion(),
           version: ver,
+          releaseNotes: rel.body || '',
           releaseUrl: latestFallbackUrl,
-          message: `Доступно обновление v${ver} на GitHub`,
+          message: `Доступно обновление v${ver}`,
         });
         return;
       }
       sendUpdateStatus({
         state: 'up-to-date',
+        currentVersion: app.getVersion(),
         version: app.getVersion(),
-        message: `Установлена актуальная версия (v${app.getVersion()})`,
+        message: `У вас установлена актуальная версия v${app.getVersion()}`,
       });
     } catch (_) {
       sendUpdateStatus({
         state: 'error',
+        currentVersion: app.getVersion(),
         message: 'Не удалось проверить обновления (проверьте интернет)',
       });
     }
@@ -329,8 +371,9 @@ async function createWindow() {
     await waitForBackend(port);
     if (mainWindow) {
       await mainWindow.loadURL(`http://127.0.0.1:${port}`);
-      // Auto-check for OTA updates 4 seconds after launch
+      // Auto-check for OTA updates 4 seconds after launch & every 30 minutes
       setTimeout(() => triggerUpdateCheck(true), 4000);
+      setInterval(() => triggerUpdateCheck(true), 30 * 60 * 1000);
     }
   } catch (err) {
     console.error(err);

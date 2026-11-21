@@ -97,6 +97,7 @@
   const btnCloseChangelog = document.getElementById('btnCloseChangelog');
   const changelogBody = document.getElementById('changelogBody');
   const btnCheckUpdates = document.getElementById('btnCheckUpdates');
+  const updateDot = document.getElementById('updateDot');
   const appVersionPill = document.getElementById('appVersionPill');
   const updateBanner = document.getElementById('updateBanner');
   const updateMessage = document.getElementById('updateMessage');
@@ -105,6 +106,21 @@
   const btnInstallUpdate = document.getElementById('btnInstallUpdate');
   const btnOpenRelease = document.getElementById('btnOpenRelease');
   const btnDismissUpdate = document.getElementById('btnDismissUpdate');
+  const updateModal = document.getElementById('updateModal');
+  const updateModalBackdrop = document.getElementById('updateModalBackdrop');
+  const btnCloseUpdateModal = document.getElementById('btnCloseUpdateModal');
+  const btnUpdateLater = document.getElementById('btnUpdateLater');
+  const updateModalTitle = document.getElementById('updateModalTitle');
+  const updateModalVersions = document.getElementById('updateModalVersions');
+  const updateModalStatus = document.getElementById('updateModalStatus');
+  const updateModalProgressWrap = document.getElementById('updateModalProgressWrap');
+  const updateModalBar = document.getElementById('updateModalBar');
+  const updateModalSize = document.getElementById('updateModalSize');
+  const updateModalSpeed = document.getElementById('updateModalSpeed');
+  const updateModalNotesWrap = document.getElementById('updateModalNotesWrap');
+  const updateModalNotes = document.getElementById('updateModalNotes');
+  const btnModalOpenRelease = document.getElementById('btnModalOpenRelease');
+  const btnModalInstallNow = document.getElementById('btnModalInstallNow');
   const historyDrawer = document.getElementById('historyDrawer');
   const drawerBackdrop = document.getElementById('drawerBackdrop');
   const btnCloseHistory = document.getElementById('btnCloseHistory');
@@ -871,28 +887,39 @@
     btnCheckUpdates.classList.remove('hidden');
     let latestReleaseUrl = null;
     let manualClick = false;
+    let hasUpdateReady = false;
+    let dismissedModalOnce = false;
+
+    const closeUpdateModal = () => {
+      updateModal.classList.add('hidden');
+      dismissedModalOnce = true;
+    };
 
     desk.getVersion().then((v) => {
       if (v) appVersionPill.textContent = `v${v}`;
     }).catch(() => {});
 
     btnCheckUpdates.addEventListener('click', () => {
+      if (hasUpdateReady) {
+        updateModal.classList.remove('hidden');
+        return;
+      }
       manualClick = true;
+      dismissedModalOnce = false;
       btnCheckUpdates.disabled = true;
       desk.checkForUpdates().finally(() => {
         setTimeout(() => { btnCheckUpdates.disabled = false; }, 1500);
       });
     });
 
-    btnInstallUpdate.addEventListener('click', () => {
-      desk.installUpdate();
-    });
-    btnOpenRelease.addEventListener('click', () => {
-      desk.openExternal(latestReleaseUrl);
-    });
-    btnDismissUpdate.addEventListener('click', () => {
-      updateBanner.classList.add('hidden');
-    });
+    btnInstallUpdate.addEventListener('click', () => desk.installUpdate());
+    btnModalInstallNow.addEventListener('click', () => desk.installUpdate());
+    btnOpenRelease.addEventListener('click', () => desk.openExternal(latestReleaseUrl));
+    btnModalOpenRelease.addEventListener('click', () => desk.openExternal(latestReleaseUrl));
+    btnDismissUpdate.addEventListener('click', () => updateBanner.classList.add('hidden'));
+    btnCloseUpdateModal.addEventListener('click', closeUpdateModal);
+    btnUpdateLater.addEventListener('click', closeUpdateModal);
+    updateModalBackdrop.addEventListener('click', closeUpdateModal);
 
     desk.onUpdateStatus((payload) => {
       if (!payload) return;
@@ -904,7 +931,7 @@
       }
       if (st === 'up-to-date') {
         if (manualClick) {
-          showToast(payload.message || 'У вас последняя версия!');
+          showToast(payload.message || 'У вас установлена последняя версия!');
           manualClick = false;
         }
         return;
@@ -917,21 +944,57 @@
         return;
       }
 
-      // Show OTA banner for available / downloading / downloaded / manual-download
+      hasUpdateReady = true;
+      if (updateDot) updateDot.classList.remove('hidden');
+
+      // Update top subtle banner
       updateBanner.classList.remove('hidden');
       updateMessage.textContent = payload.message || 'Обновление TikCut Studio';
       updateBarWrap.classList.add('hidden');
       btnInstallUpdate.classList.add('hidden');
       btnOpenRelease.classList.add('hidden');
 
-      if (st === 'downloading') {
+      // Update Center Modal
+      if (payload.version && payload.currentVersion) {
+        updateModalVersions.textContent = `v${payload.currentVersion} → v${payload.version}`;
+      }
+      updateModalStatus.textContent = payload.message || 'Обновление TikCut Studio';
+      if (payload.releaseNotes) {
+        updateModalNotes.textContent = payload.releaseNotes;
+        updateModalNotesWrap.classList.remove('hidden');
+      }
+
+      updateModalProgressWrap.classList.add('hidden');
+      btnModalInstallNow.classList.add('hidden');
+      btnModalOpenRelease.classList.add('hidden');
+
+      if (st === 'available') {
+        updateModalTitle.textContent = `Найдено обновление v${payload.version || ''}`;
+        if (!dismissedModalOnce) updateModal.classList.remove('hidden');
+      } else if (st === 'downloading') {
+        const pct = payload.percent || 0;
         updateBarWrap.classList.remove('hidden');
-        updateBarFill.style.width = `${payload.percent || 0}%`;
+        updateBarFill.style.width = `${pct}%`;
+        updateModalTitle.textContent = 'Загрузка обновления...';
+        updateModalProgressWrap.classList.remove('hidden');
+        updateModalBar.style.width = `${pct}%`;
+        if (payload.doneMb && payload.totalMb) {
+          updateModalSize.textContent = `${payload.doneMb} / ${payload.totalMb} МБ (${pct}%)`;
+        }
+        if (payload.speedMb) {
+          updateModalSpeed.textContent = `${payload.speedMb} МБ/с`;
+        }
       } else if (st === 'downloaded') {
         btnInstallUpdate.classList.remove('hidden');
+        btnModalInstallNow.classList.remove('hidden');
+        updateModalTitle.textContent = `Обновление v${payload.version || ''} готово!`;
+        updateModal.classList.remove('hidden');
       } else if (st === 'manual-download') {
         latestReleaseUrl = payload.releaseUrl || null;
         btnOpenRelease.classList.remove('hidden');
+        btnModalOpenRelease.classList.remove('hidden');
+        updateModalTitle.textContent = `Доступно обновление v${payload.version || ''}`;
+        if (!dismissedModalOnce) updateModal.classList.remove('hidden');
       }
     });
   }

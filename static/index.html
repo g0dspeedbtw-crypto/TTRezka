@@ -23,8 +23,9 @@
         <span>📋 Что нового</span>
       </button>
       <button id="btnCheckUpdates" class="btn btn-ghost hidden" title="Проверить обновления по воздуху">
+        <span id="updateDot" class="update-dot hidden"></span>
         <span>🔄 Обновления</span>
-        <span id="appVersionPill" class="pill-count">v1.0.0</span>
+        <span id="appVersionPill" class="pill-count">v1.3.0</span>
       </button>
       <button id="btnHistory" class="btn btn-ghost">
         <span>История проектов</span>
@@ -222,26 +223,26 @@
 
         <div class="pro-box">
           <div class="pro-box-title">⚡ Удержание, брендинг и музыка</div>
-          <div class="toggle-grid">
-            <label class="checkbox-label">
-              <input id="uppercaseToggle" type="checkbox" checked />
-              <span>ЗАГЛАВНЫЕ БУКВЫ (CAPS)</span>
+          <div class="switch-grid">
+            <label class="switch-item">
+              <span class="switch-label">ЗАГЛАВНЫЕ БУКВЫ (CAPS)</span>
+              <span class="switch"><input id="uppercaseToggle" type="checkbox" checked /><span class="slider"></span></span>
             </label>
-            <label class="checkbox-label">
-              <input id="hookBannerToggle" type="checkbox" />
-              <span>🏷 Заголовок-хук сверху (4 сек)</span>
+            <label class="switch-item">
+              <span class="switch-label">🏷 Заголовок-хук (4 сек)</span>
+              <span class="switch"><input id="hookBannerToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
-            <label class="checkbox-label">
-              <input id="jumpCutsToggle" type="checkbox" />
-              <span>✂️ Jump-Cuts (убрать паузы)</span>
+            <label class="switch-item">
+              <span class="switch-label">✂️ Jump-Cuts (убрать паузы)</span>
+              <span class="switch"><input id="jumpCutsToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
-            <label class="checkbox-label">
-              <input id="fps60Toggle" type="checkbox" />
-              <span>⚡ 60 FPS (для игр и RTX NVENC)</span>
+            <label class="switch-item">
+              <span class="switch-label">⚡ 60 FPS (игры / RTX)</span>
+              <span class="switch"><input id="fps60Toggle" type="checkbox" /><span class="slider"></span></span>
             </label>
-            <label class="checkbox-label">
-              <input id="videoEnhanceToggle" type="checkbox" />
-              <span>🎨 Сочность и резкость кадра</span>
+            <label class="switch-item">
+              <span class="switch-label">🎨 Сочность и резкость</span>
+              <span class="switch"><input id="videoEnhanceToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
           </div>
 
@@ -403,6 +404,46 @@
           <button id="btnCancelEditor" type="button" class="btn btn-ghost">Отмена</button>
           <button id="btnSaveEditor" type="button" class="btn btn-primary">💾 Сохранить и перерендерить</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OTA Update Center Modal -->
+  <div id="updateModal" class="modal hidden">
+    <div class="modal-backdrop" id="updateModalBackdrop"></div>
+    <div class="modal-panel update-modal-panel">
+      <div class="modal-header">
+        <div class="update-modal-title-row">
+          <div class="update-modal-icon">🚀</div>
+          <div>
+            <h3 id="updateModalTitle">Доступно обновление</h3>
+            <div class="modal-sub" id="updateModalVersions">v1.2.2 → v1.3.0</div>
+          </div>
+        </div>
+        <button id="btnCloseUpdateModal" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+
+      <div id="updateModalStatus" class="update-modal-status">Подготовка обновления...</div>
+
+      <div id="updateModalProgressWrap" class="update-modal-progress hidden">
+        <div class="progress-track lg">
+          <div id="updateModalBar" class="progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="update-speed-row">
+          <span id="updateModalSize">0 / 0 МБ</span>
+          <span id="updateModalSpeed">0 МБ/с</span>
+        </div>
+      </div>
+
+      <div id="updateModalNotesWrap" class="update-notes-box hidden">
+        <div class="update-notes-title">✨ Что нового в этой версии</div>
+        <div id="updateModalNotes" class="update-notes-body"></div>
+      </div>
+
+      <div class="editor-footer">
+        <button id="btnUpdateLater" type="button" class="btn btn-ghost">Позже</button>
+        <button id="btnModalOpenRelease" type="button" class="btn btn-primary hidden">⬇ Скачать установщик</button>
+        <button id="btnModalInstallNow" type="button" class="btn btn-primary hidden">🚀 Перезапустить и обновиться</button>
       </div>
     </div>
   </div>
