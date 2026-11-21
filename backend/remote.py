@@ -9,7 +9,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import yt_dlp
 from yt_dlp.utils import download_range_func
 
-from backend.highlights import RUSSIAN_HOOK_WORDS, RUSSIAN_OPENER_WORDS, _make_clip_title
+from backend.highlights import (
+    _make_clip_title,
+    score_russian_text_fun_and_hooks,
+)
 from backend.twitch_chat import analyze_twitch_chat_peaks, extract_twitch_vod_id
 
 
@@ -258,10 +261,56 @@ def find_remote_highlights(
     candidates: List[Dict[str, Any]] = []
 
     if segments:
-        # For very long streams (e.g. 3+ hours), stride smartly so analysis finishes in <2 seconds
         n_seg = len(segments)
-        stride = 1 if n_seg <= 450 else max(1, n_seg // 400)
+        seen_ranges = set()
 
+        def _add_remote_cand(s_t: float, e_t: float, txt: str, w_list: List[Dict[str, Any]], after_pause: bool) -> None:
+            key = (round(s_t, 1), round(e_t, 1))
+            if key in seen_ranges:
+                return
+            seen_ranges.add(key)
+            sc = _score_remote_window(s_t, e_t, total_duration, txt, w_list, heatmap, after_pause)
+            candidates.append(
+                {
+                    "start": round(s_t, 2),
+                    "end": round(e_t, 2),
+                    "duration": round(e_t - s_t, 2),
+                    "text": txt,
+                    "score_data": sc,
+                }
+            )
+
+        # 1. Peak-Anchored Windows around top YouTube Heatmap / Twitch Chat peaks (Setup -> Peak -> Reaction!)
+        if has_heatmap:
+            sorted_peaks = sorted(heatmap, key=lambda h: float(h.get("value", 0.0)), reverse=True)
+            chosen_peak_centers: List[float] = []
+            for h in sorted_peaks:
+                center = (float(h["start_time"]) + float(h["end_time"])) * 0.5
+                if all(abs(center - c) >= 18.0 for c in chosen_peak_centers):
+                    chosen_peak_centers.append(center)
+                    if len(chosen_peak_centers) >= max(16, clip_count * 4):
+                        break
+            for center in chosen_peak_centers:
+                desired_start = max(0.0, center - min(18.0, min_duration * 0.65))
+                desired_end = min(total_duration or (center + 20.0), center + min(18.0, max_duration * 0.42))
+                i_start = min(range(n_seg), key=lambda k: abs(segments[k]["start"] - desired_start))
+                i_end = min(range(n_seg), key=lambda k: abs(segments[k]["end"] - desired_end))
+                if i_end < i_start:
+                    i_end = i_start
+                while i_end + 1 < n_seg and (segments[i_end]["end"] - segments[i_start]["start"]) < min_duration:
+                    i_end += 1
+                while i_start > 0 and (segments[i_end]["end"] - segments[i_start]["start"]) < min_duration:
+                    i_start -= 1
+                s_t = max(0.0, segments[i_start]["start"] - 0.15)
+                e_t = min(total_duration or (segments[i_end]["end"] + 1.0), segments[i_end]["end"] + 0.25)
+                if min_duration * 0.8 <= (e_t - s_t) <= max_duration + 6.0:
+                    seg_slice = segments[i_start : i_end + 1]
+                    txt = " ".join(s["text"] for s in seg_slice).strip()
+                    w_slice = [w for s in seg_slice for w in s.get("words", [])]
+                    _add_remote_cand(s_t, e_t, txt, w_slice, True)
+
+        # 2. Sliding transcript windows across the stream (catches funny dialogue & hooks)
+        stride = 1 if n_seg <= 450 else max(1, n_seg // 400)
         for i in range(0, n_seg, stride):
             start_t = max(0.0, segments[i]["start"] - 0.15)
             prev_end = segments[i - 1]["end"] if i > 0 else 0.0
@@ -279,18 +328,7 @@ def find_remote_highlights(
                 if dur > max_duration + 4.0:
                     break
 
-                txt = " ".join(acc_text).strip()
-                sc = _score_remote_window(start_t, end_t, txt, acc_words, heatmap, starts_after_pause)
-                candidates.append(
-                    {
-                        "start": round(start_t, 2),
-                        "end": round(end_t, 2),
-                        "duration": round(dur, 2),
-                        "text": txt,
-                        "score_data": sc,
-                    }
-                )
-                # Keep one optimal window per start anchor on huge streams
+                _add_remote_cand(start_t, end_t, " ".join(acc_text).strip(), list(acc_words), starts_after_pause)
                 if n_seg > 450 and dur >= (min_duration + max_duration) * 0.45:
                     break
 
@@ -398,6 +436,7 @@ def find_remote_highlights(
 def _score_remote_window(
     start: float,
     end: float,
+    total_duration: float,
     text: str,
     window_words: List[Dict[str, Any]],
     heatmap: List[Dict[str, Any]],
@@ -410,46 +449,36 @@ def _score_remote_window(
     wps = len(window_words) / duration
     if wps < 0.4:
         speech_score = 0.15
-    elif wps <= 3.8:
-        speech_score = min(1.0, 0.25 + (wps / 3.2) * 0.75)
+    elif wps <= 4.0:
+        speech_score = min(1.0, 0.25 + (wps / 3.3) * 0.75)
     else:
-        speech_score = 0.72
+        speech_score = 0.78
 
-    # Russian linguistic & emotional hook score
-    lower_text = text.lower()
-    tokens = re.findall(r"[а-яёa-z0-9]+", lower_text)
-    hook_hits = sum(1 for t in tokens if t in RUSSIAN_HOOK_WORDS)
-    excl_quest = text.count("!") + text.count("?")
-    num_hits = len(re.findall(r"\b\d+\b", text))
-    opening_str = " ".join(tokens[:8])
-    opener_bonus = 0.22 if any(opening_str.startswith(op) or f" {op}" in opening_str for op in RUSSIAN_OPENER_WORDS) else 0.0
-    pause_bonus = 0.08 if starts_after_pause else 0.0
+    # Comedy / Reaction & Hook Language Score + Ad/Intro Penalty
+    comedy_score, hook_score, ad_penalty = score_russian_text_fun_and_hooks(text, starts_after_pause)
 
-    hook_density = hook_hits / max(1.0, len(tokens) / 25.0)
-    ling_score = min(
-        1.0,
-        0.15
-        + min(0.45, hook_density * 0.16)
-        + min(0.22, excl_quest * 0.08)
-        + min(0.10, num_hits * 0.04)
-        + opener_bonus
-        + pause_bonus,
-    )
+    edge_penalty = 0.0
+    if total_duration > 120:
+        if start < 12.0 or end > (total_duration - 12.0):
+            edge_penalty = 0.14
 
     if heatmap:
-        raw_total = 0.45 * hm_score + 0.38 * ling_score + 0.17 * speech_score
+        raw_total = 0.42 * hm_score + 0.34 * comedy_score + 0.14 * hook_score + 0.10 * speech_score - ad_penalty - edge_penalty
     else:
-        raw_total = 0.68 * ling_score + 0.32 * speech_score
+        raw_total = 0.54 * comedy_score + 0.26 * hook_score + 0.20 * speech_score - ad_penalty - edge_penalty
 
-    viral_score = int(round(min(99, max(50, 44 + raw_total * 55))))
+    raw_total = max(0.05, min(1.0, raw_total))
+    viral_score = int(round(min(99, max(48, 44 + raw_total * 56))))
 
     tags: List[str] = []
-    if heatmap and hm_score >= 0.55:
+    if heatmap and hm_score >= 0.52:
         is_tw = any(h.get("source") == "twitch_chat" for h in heatmap[:3])
         tags.append("💬 Взрыв чата Twitch" if is_tw else "📈 Пик пересмотров")
-    if ling_score >= 0.56:
+    if comedy_score >= 0.40:
+        tags.append("😂 Смешной / Реакция")
+    if hook_score >= 0.52 and len(tags) < 3:
         tags.append("💬 Сильный хук")
-    if speech_score >= 0.72:
+    if speech_score >= 0.74 and len(tags) < 3:
         tags.append("🎤 Живая подача")
     if not tags:
         tags.append("✨ Топ момент")
@@ -458,7 +487,8 @@ def _score_remote_window(
         "viral_score": viral_score,
         "raw_total": raw_total,
         "heatmap_score": round(hm_score, 3),
-        "ling_score": round(ling_score, 3),
+        "comedy_score": round(comedy_score, 3),
+        "hook_score": round(hook_score, 3),
         "speech_score": round(speech_score, 3),
         "tags": tags[:3],
     }
