@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+
+# Node / Electron build artifacts
+desktop/node_modules/
+desktop/dist/
+desktop/backend-dist/
+
+# Runtime user data
+data/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

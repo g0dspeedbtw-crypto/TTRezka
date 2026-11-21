@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TikCut Studio — Нарезки 9:16 с авто-субтитрами</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">▶</div>
+      <div>
+        <div class="brand-title">TikCut Studio</div>
+        <div class="brand-sub">100% локально • Бесплатно • 9:16 + Русские авто-субтитры</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="btnHistory" class="btn btn-ghost">
+        <span>История проектов</span>
+        <span id="historyCount" class="pill-count">0</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Hero / Upload + Studio Configurator -->
+    <section class="studio-grid">
+      <!-- Left: Upload / Link + Settings -->
+      <div class="card panel-main">
+        <div class="card-header">
+          <h2>1. Выберите источник видео</h2>
+          <span class="badge badge-local">Без скачивания всего видео</span>
+        </div>
+
+        <div class="source-tabs" id="sourceTabs">
+          <button type="button" class="source-tab active" data-tab="url">
+            🔗 Ссылка (YouTube / Стрим)
+          </button>
+          <button type="button" class="source-tab" data-tab="file">
+            📁 Файл с компьютера
+          </button>
+        </div>
+
+        <!-- Tab 1: Link to YouTube / Past Stream (Zero full download) -->
+        <div id="urlPanel" class="url-panel">
+          <div class="url-input-row">
+            <input
+              id="urlInput"
+              type="url"
+              placeholder="Вставьте ссылку на YouTube, запись стрима Twitch / YouTube Live / VK..."
+              autocomplete="off"
+            />
+            <button id="btnProbeUrl" type="button" class="btn btn-primary">
+              🔍 Проанализировать
+            </button>
+          </div>
+          <div class="url-hint">
+            ИИ проанализирует транскрипт и карту пересмотров YouTube <strong>без скачивания всего стрима</strong>, а затем вырежет только лучшие моменты 9:16.
+          </div>
+        </div>
+
+        <!-- Tab 2: Local file upload -->
+        <div id="filePanel" class="hidden">
+          <div id="dropZone" class="drop-zone">
+            <input id="fileInput" type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v,.avi" hidden />
+            <div class="drop-icon">🎬</div>
+            <div class="drop-title">Перетащите видео сюда или нажмите для выбора</div>
+            <div class="drop-hint">MP4, MOV, MKV, WEBM • Любая длительность • Всё обрабатывается локально</div>
+            <button id="btnPickFile" type="button" class="btn btn-secondary">Выбрать файл</button>
+          </div>
+
+          <div id="uploadProgressWrap" class="upload-progress hidden">
+            <div class="progress-row">
+              <span id="uploadFileName" class="ellipsis">Загрузка...</span>
+              <span id="uploadPct">0%</span>
+            </div>
+            <div class="progress-track">
+              <div id="uploadBar" class="progress-fill" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="videoReadyBanner" class="video-banner hidden">
+          <img id="readyThumb" class="video-banner-thumb hidden" alt="" />
+          <div class="video-banner-info">
+            <div class="video-banner-title" id="readyFileName">video.mp4</div>
+            <div class="video-banner-meta" id="readyFileMeta">1920×1080 • 12:34</div>
+            <div class="video-banner-badges" id="readyBadges"></div>
+          </div>
+          <button id="btnChangeVideo" type="button" class="btn btn-ghost btn-sm">Заменить</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="card-header">
+          <h2>2. Настройки нарезки и субтитров</h2>
+        </div>
+
+        <div class="form-grid">
+          <div class="field">
+            <label for="clipCount">Количество клипов: <strong id="clipCountVal">5</strong></label>
+            <input id="clipCount" type="range" min="1" max="12" value="5" />
+          </div>
+
+          <div class="field">
+            <label for="whisperModel">Точность распознавания (Whisper RU)</label>
+            <select id="whisperModel">
+              <option value="tiny">Tiny — сверхбыстро (черновик)</option>
+              <option value="base">Base — быстро</option>
+              <option value="small" selected>Small — оптимально (рекомендуется)</option>
+              <option value="medium">Medium — максимальная точность</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="minDuration">Мин. длина клипа (сек)</label>
+            <input id="minDuration" type="number" min="8" max="90" value="20" />
+          </div>
+
+          <div class="field">
+            <label for="maxDuration">Макс. длина клипа (сек)</label>
+            <input id="maxDuration" type="number" min="15" max="120" value="55" />
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label>Формат кадра 9:16</label>
+          <div class="segmented" id="cropModeGroup">
+            <button type="button" class="seg-btn active" data-value="fill">
+              📱 Заполнение (Crop 9:16)
+            </button>
+            <button type="button" class="seg-btn" data-value="blur_bg">
+              🌫 Размытый фон (весь кадр)
+            </button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label>Стиль авто-субтитров</label>
+          <div id="styleCards" class="style-cards"></div>
+        </div>
+
+        <div class="form-grid three-col">
+          <div class="field">
+            <label for="fontSelect">Шрифт субтитров</label>
+            <select id="fontSelect"></select>
+          </div>
+
+          <div class="field">
+            <label for="fontSize">Размер текста</label>
+            <select id="fontSize">
+              <option value="small">Компактный</option>
+              <option value="medium" selected>Стандартный</option>
+              <option value="large">Крупный</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="subPosition">Позиция</label>
+            <select id="subPosition">
+              <option value="center">По центру</option>
+              <option value="lower_third" selected>Нижняя треть (TikTok)</option>
+              <option value="bottom">Внизу</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="toggle-row">
+          <label class="checkbox-label">
+            <input id="uppercaseToggle" type="checkbox" checked />
+            <span>ЗАГЛАВНЫЕ БУКВЫ (CAPS) для максимальной читаемости</span>
+          </label>
+        </div>
+
+        <button id="btnStart" type="button" class="btn btn-primary btn-lg" disabled>
+          ⚡ Найти лучшие моменты и нарезать 9:16
+        </button>
+      </div>
+
+      <!-- Right: Live 9:16 Phone Preview -->
+      <div class="card panel-preview">
+        <div class="card-header">
+          <h2>Живой предпросмотр 9:16</h2>
+          <span class="badge">Караоке-подсветка</span>
+        </div>
+
+        <div class="phone-mockup">
+          <div class="phone-notch"></div>
+          <div id="previewScreen" class="phone-screen mode-fill">
+            <div class="preview-bg-blur"></div>
+            <div class="preview-video-frame">
+              <div class="preview-ambient-orb"></div>
+              <div class="preview-grid-lines"></div>
+              <div class="preview-center-label">9:16 HD 1080×1920</div>
+            </div>
+
+            <!-- Simulated TikTok right-side UI icons -->
+            <div class="tiktok-ui-icons">
+              <div class="tt-icon">♥<span>12.4K</span></div>
+              <div class="tt-icon">💬<span>348</span></div>
+              <div class="tt-icon">↗<span>1.9K</span></div>
+            </div>
+
+            <!-- Live animated subtitles -->
+            <div id="liveSubBox" class="live-sub-box pos-lower_third">
+              <div id="liveSubText" class="live-sub-text"></div>
+            </div>
+          </div>
+        </div>
+
+        <p class="preview-caption">
+          Субтитры автоматически синхронизируются по каждому слову и вшиваются прямо в MP4 видео.
+        </p>
+      </div>
+    </section>
+
+    <!-- Processing Progress Card -->
+    <section id="progressSection" class="card progress-card hidden">
+      <div class="progress-header">
+        <div>
+          <h2 id="procTitle">Обработка видео...</h2>
+          <div id="procMessage" class="proc-message">Подготовка...</div>
+        </div>
+        <div id="procPct" class="proc-pct">0%</div>
+      </div>
+
+      <div class="progress-track lg">
+        <div id="procBar" class="progress-fill animated" style="width: 0%"></div>
+      </div>
+
+      <div class="steps-row">
+        <div class="step-pill" data-stage="extracting_audio">1. Аудио</div>
+        <div class="step-pill" data-stage="transcribing">2. Субтитры (Whisper)</div>
+        <div class="step-pill" data-stage="analyzing">3. Поиск хитов</div>
+        <div class="step-pill" data-stage="rendering">4. Рендер 9:16</div>
+      </div>
+
+      <div id="procError" class="error-box hidden"></div>
+    </section>
+
+    <!-- Results Gallery -->
+    <section id="resultsSection" class="results-section hidden">
+      <div class="results-header">
+        <div>
+          <h2>Готовые TikTok нарезки 9:16</h2>
+          <p id="resultsMeta" class="results-meta">Отобраны самые динамичные и эмоциональные моменты</p>
+        </div>
+      </div>
+
+      <div id="clipsGrid" class="clips-grid"></div>
+    </section>
+  </main>
+
+  <!-- History Drawer -->
+  <div id="historyDrawer" class="drawer hidden">
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <div class="drawer-panel">
+      <div class="drawer-header">
+        <h3>История проектов</h3>
+        <button id="btnCloseHistory" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

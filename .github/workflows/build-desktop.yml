@@ -1,0 +1,68 @@
+name: Build TikCut Studio (macOS & Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            platform: mac
+          - os: windows-latest
+            platform: win
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Python dependencies & PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn python-multipart pillow numpy faster-whisper yt-dlp pyinstaller
+
+      - name: Download bundled Cyrillic fonts
+        run: python -m backend.download_fonts
+
+      - name: Bundle standalone backend
+        run: python scripts/build_backend.py
+
+      - name: Install Electron dependencies
+        working-directory: desktop
+        run: npm install
+
+      - name: Build macOS DMG
+        if: matrix.platform == 'mac'
+        working-directory: desktop
+        run: npm run build:mac
+
+      - name: Build Windows EXE Installer
+        if: matrix.platform == 'win'
+        working-directory: desktop
+        run: npm run build:win
+
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TikCut-Studio-${{ matrix.platform }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.exe
