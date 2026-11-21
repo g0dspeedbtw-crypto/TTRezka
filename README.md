@@ -19,6 +19,18 @@
 2. **Автоматически через GitHub Actions** (даже без Windows-ПК):
    В проекте уже готов workflow `.github/workflows/build-desktop.yml`, который автоматически собирает сразу **macOS `.dmg`** и **Windows `.exe`**.
 
+## Обновления по воздуху (OTA)
+Приложение автоматически проверяет новые релизы на GitHub (`g0dspeedbtw-crypto/TTRezka`) при запуске и по кнопке **«🔄 Обновления»** в верхней панели, скачивает обновление в фоне с индикатором прогресса и предлагает перезапустить приложение для установки.
+
+Чтобы выпустить новую версию для всех пользователей:
+1. Поднимите `"version"` в `desktop/package.json` (например, с `"1.0.0"` до `"1.0.1"`).
+2. Создайте тег и отправьте на GitHub:
+   ```bash
+   git add desktop/package.json && git commit -m "Release v1.0.1"
+   git tag v1.0.1 && git push origin main --tags
+   ```
+GitHub Actions сам соберёт macOS + Windows и опубликует GitHub Release — все установленные приложения получат обновление автоматически!
+
 ## Режим разработки
 - Веб-версия: `./start.sh`
 - Десктоп в dev-режиме: `npm --prefix desktop start`

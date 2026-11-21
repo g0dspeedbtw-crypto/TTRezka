@@ -6,8 +6,13 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:mac": "electron-builder --mac dmg dir",
-    "build:win": "electron-builder --win nsis portable"
+    "build:mac": "electron-builder --mac dmg zip dir",
+    "build:win": "electron-builder --win nsis portable",
+    "publish:mac": "electron-builder --mac dmg zip --publish always",
+    "publish:win": "electron-builder --win nsis portable --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "electron": "^33.2.1",
@@ -16,6 +21,13 @@
   "build": {
     "appId": "com.tikcut.studio",
     "productName": "TikCut Studio",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "g0dspeedbtw-crypto",
+        "repo": "TTRezka"
+      }
+    ],
     "directories": {
       "output": "dist",
       "buildResources": "assets"
@@ -39,6 +51,10 @@
       "target": [
         {
           "target": "dmg",
+          "arch": ["arm64"]
+        },
+        {
+          "target": "zip",
           "arch": ["arm64"]
         },
         {

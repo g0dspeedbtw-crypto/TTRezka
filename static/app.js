@@ -61,6 +61,15 @@
 
   const btnHistory = document.getElementById('btnHistory');
   const historyCount = document.getElementById('historyCount');
+  const btnCheckUpdates = document.getElementById('btnCheckUpdates');
+  const appVersionPill = document.getElementById('appVersionPill');
+  const updateBanner = document.getElementById('updateBanner');
+  const updateMessage = document.getElementById('updateMessage');
+  const updateBarWrap = document.getElementById('updateBarWrap');
+  const updateBarFill = document.getElementById('updateBarFill');
+  const btnInstallUpdate = document.getElementById('btnInstallUpdate');
+  const btnOpenRelease = document.getElementById('btnOpenRelease');
+  const btnDismissUpdate = document.getElementById('btnDismissUpdate');
   const historyDrawer = document.getElementById('historyDrawer');
   const drawerBackdrop = document.getElementById('drawerBackdrop');
   const btnCloseHistory = document.getElementById('btnCloseHistory');
@@ -84,8 +93,11 @@
   }
 
   async function init() {
-    if (window.tikcutDesktop && window.tikcutDesktop.platform === 'darwin') {
-      document.body.classList.add('is-mac-desktop');
+    if (window.tikcutDesktop) {
+      if (window.tikcutDesktop.platform === 'darwin') {
+        document.body.classList.add('is-mac-desktop');
+      }
+      initDesktopUpdater();
     }
     const res = await fetch('/api/config');
     const cfg = await res.json();
@@ -588,6 +600,78 @@
   });
   btnCloseHistory.addEventListener('click', () => historyDrawer.classList.add('hidden'));
   drawerBackdrop.addEventListener('click', () => historyDrawer.classList.add('hidden'));
+
+  function initDesktopUpdater() {
+    const desk = window.tikcutDesktop;
+    if (!desk || !btnCheckUpdates) return;
+
+    btnCheckUpdates.classList.remove('hidden');
+    let latestReleaseUrl = null;
+    let manualClick = false;
+
+    desk.getVersion().then((v) => {
+      if (v) appVersionPill.textContent = `v${v}`;
+    }).catch(() => {});
+
+    btnCheckUpdates.addEventListener('click', () => {
+      manualClick = true;
+      btnCheckUpdates.disabled = true;
+      desk.checkForUpdates().finally(() => {
+        setTimeout(() => { btnCheckUpdates.disabled = false; }, 1500);
+      });
+    });
+
+    btnInstallUpdate.addEventListener('click', () => {
+      desk.installUpdate();
+    });
+    btnOpenRelease.addEventListener('click', () => {
+      desk.openExternal(latestReleaseUrl);
+    });
+    btnDismissUpdate.addEventListener('click', () => {
+      updateBanner.classList.add('hidden');
+    });
+
+    desk.onUpdateStatus((payload) => {
+      if (!payload) return;
+      const st = payload.state;
+
+      if (st === 'checking') {
+        if (manualClick) showToast('Проверка обновлений...');
+        return;
+      }
+      if (st === 'up-to-date') {
+        if (manualClick) {
+          showToast(payload.message || 'У вас последняя версия!');
+          manualClick = false;
+        }
+        return;
+      }
+      if (st === 'error') {
+        if (manualClick) {
+          showToast(payload.message || 'Ошибка проверки обновлений');
+          manualClick = false;
+        }
+        return;
+      }
+
+      // Show OTA banner for available / downloading / downloaded / manual-download
+      updateBanner.classList.remove('hidden');
+      updateMessage.textContent = payload.message || 'Обновление TikCut Studio';
+      updateBarWrap.classList.add('hidden');
+      btnInstallUpdate.classList.add('hidden');
+      btnOpenRelease.classList.add('hidden');
+
+      if (st === 'downloading') {
+        updateBarWrap.classList.remove('hidden');
+        updateBarFill.style.width = `${payload.percent || 0}%`;
+      } else if (st === 'downloaded') {
+        btnInstallUpdate.classList.remove('hidden');
+      } else if (st === 'manual-download') {
+        latestReleaseUrl = payload.releaseUrl || null;
+        btnOpenRelease.classList.remove('hidden');
+      }
+    });
+  }
 
   init();
 })();

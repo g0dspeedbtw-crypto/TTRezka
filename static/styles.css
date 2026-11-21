@@ -93,8 +93,47 @@ body {
 .topbar button, .topbar a {
   -webkit-app-region: no-drag;
 }
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 body.is-mac-desktop .topbar {
   padding-left: 96px;
+}
+
+.update-banner {
+  position: relative;
+  z-index: 15;
+  background: linear-gradient(90deg, rgba(124, 92, 255, 0.22), rgba(0, 229, 255, 0.16));
+  border-bottom: 1px solid rgba(0, 229, 255, 0.35);
+  padding: 10px 24px;
+}
+.update-banner-inner {
+  max-width: 1260px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.update-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.update-bar-wrap {
+  flex: 1;
+  min-width: 160px;
+  max-width: 280px;
+}
+.update-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .source-tabs {

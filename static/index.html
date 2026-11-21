@@ -19,12 +19,35 @@
       </div>
     </div>
     <div class="topbar-actions">
+      <button id="btnCheckUpdates" class="btn btn-ghost hidden" title="Проверить обновления по воздуху">
+        <span>🔄 Обновления</span>
+        <span id="appVersionPill" class="pill-count">v1.0.0</span>
+      </button>
       <button id="btnHistory" class="btn btn-ghost">
         <span>История проектов</span>
         <span id="historyCount" class="pill-count">0</span>
       </button>
     </div>
   </header>
+
+  <div id="updateBanner" class="update-banner hidden">
+    <div class="update-banner-inner">
+      <div class="update-info">
+        <span id="updateIcon">✨</span>
+        <span id="updateMessage">Доступно обновление...</span>
+      </div>
+      <div id="updateBarWrap" class="update-bar-wrap hidden">
+        <div class="progress-track">
+          <div id="updateBarFill" class="progress-fill" style="width: 0%"></div>
+        </div>
+      </div>
+      <div class="update-actions">
+        <button id="btnInstallUpdate" class="btn btn-primary btn-sm hidden">⚡ Перезапустить и обновить</button>
+        <button id="btnOpenRelease" class="btn btn-primary btn-sm hidden">⬇ Скачать обновление</button>
+        <button id="btnDismissUpdate" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+    </div>
+  </div>
 
   <main class="container">
     <!-- Hero / Upload + Studio Configurator -->

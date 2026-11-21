@@ -1,12 +1,176 @@
-const { app, BrowserWindow, shell, dialog } = require('electron');
+const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const { spawn } = require('child_process');
 const http = require('http');
+const https = require('https');
 const net = require('net');
 const path = require('path');
 const fs = require('fs');
 
+const GITHUB_REPO = 'g0dspeedbtw-crypto/TTRezka';
+const RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
+
 let mainWindow = null;
 let backendProc = null;
+let latestFallbackUrl = RELEASES_URL;
+
+function sendUpdateStatus(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('updater:status', payload);
+  }
+}
+
+function compareSemver(a, b) {
+  const pa = String(a || '0').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '0').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const da = pa[i] || 0;
+    const db = pb[i] || 0;
+    if (da > db) return 1;
+    if (da < db) return -1;
+  }
+  return 0;
+}
+
+function fetchLatestGithubRelease() {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
+      { headers: { 'User-Agent': 'TikCut-Studio-Updater' } },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          if (res.statusCode === 404) {
+            return resolve(null);
+          }
+          if (res.statusCode !== 200) {
+            return reject(new Error(`GitHub API HTTP ${res.statusCode}`));
+          }
+          try {
+            resolve(JSON.parse(body));
+          } catch (e) {
+            reject(e);
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.setTimeout(10000, () => {
+      req.destroy();
+      reject(new Error('Таймаут подключения к GitHub'));
+    });
+  });
+}
+
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdateStatus({ state: 'checking', message: 'Проверка обновлений...' });
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    sendUpdateStatus({
+      state: 'available',
+      version: info.version,
+      message: `Найдено обновление v${info.version} — начинаем загрузку...`,
+    });
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    sendUpdateStatus({
+      state: 'up-to-date',
+      version: info?.version || app.getVersion(),
+      message: `Установлена последняя версия (v${app.getVersion()})`,
+    });
+  });
+
+  autoUpdater.on('download-progress', (prog) => {
+    const pct = Math.round(prog.percent || 0);
+    sendUpdateStatus({
+      state: 'downloading',
+      percent: pct,
+      message: `Скачивание обновления: ${pct}%`,
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    sendUpdateStatus({
+      state: 'downloaded',
+      version: info.version,
+      message: `Обновление v${info.version} готово к установке!`,
+    });
+  });
+
+  autoUpdater.on('error', async (err) => {
+    console.warn('[updater] autoUpdater error, checking GitHub API fallback:', err?.message);
+    try {
+      const rel = await fetchLatestGithubRelease();
+      if (rel && rel.tag_name && compareSemver(rel.tag_name, app.getVersion()) > 0) {
+        const ver = rel.tag_name.replace(/^v/, '');
+        latestFallbackUrl = rel.html_url || RELEASES_URL;
+        sendUpdateStatus({
+          state: 'manual-download',
+          version: ver,
+          releaseUrl: latestFallbackUrl,
+          message: `Доступно обновление v${ver} на GitHub`,
+        });
+        return;
+      }
+      sendUpdateStatus({
+        state: 'up-to-date',
+        version: app.getVersion(),
+        message: `Установлена актуальная версия (v${app.getVersion()})`,
+      });
+    } catch (_) {
+      sendUpdateStatus({
+        state: 'error',
+        message: 'Не удалось проверить обновления (проверьте интернет)',
+      });
+    }
+  });
+}
+
+async function triggerUpdateCheck(silent = false) {
+  if (!silent) {
+    sendUpdateStatus({ state: 'checking', message: 'Проверка обновлений...' });
+  }
+  if (!app.isPackaged) {
+    // In dev mode, check GitHub Releases API directly
+    try {
+      const rel = await fetchLatestGithubRelease();
+      if (rel && rel.tag_name && compareSemver(rel.tag_name, app.getVersion()) > 0) {
+        const ver = rel.tag_name.replace(/^v/, '');
+        latestFallbackUrl = rel.html_url || RELEASES_URL;
+        sendUpdateStatus({
+          state: 'manual-download',
+          version: ver,
+          releaseUrl: latestFallbackUrl,
+          message: `Доступно обновление v${ver}`,
+        });
+      } else if (!silent) {
+        sendUpdateStatus({
+          state: 'up-to-date',
+          version: app.getVersion(),
+          message: `Установлена последняя версия (v${app.getVersion()})`,
+        });
+      }
+    } catch (_) {
+      if (!silent) {
+        sendUpdateStatus({ state: 'error', message: 'Не удалось проверить обновления' });
+      }
+    }
+    return;
+  }
+
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (err) {
+    console.warn('[updater] checkForUpdates threw:', err?.message);
+  }
+}
 
 function findFreePort() {
   return new Promise((resolve, reject) => {
@@ -52,7 +216,6 @@ function resolveBackendCommand(port) {
   const isWin = process.platform === 'win32';
   const exeName = isWin ? 'tikcut-backend.exe' : 'tikcut-backend';
 
-  // 1. Packaged PyInstaller binary inside Electron resources
   const packagedBin = path.join(
     process.resourcesPath,
     'backend-dist',
@@ -67,7 +230,6 @@ function resolveBackendCommand(port) {
     };
   }
 
-  // 2. Local PyInstaller build next to desktop/
   const localBin = path.join(__dirname, 'backend-dist', 'tikcut-backend', exeName);
   if (fs.existsSync(localBin)) {
     return {
@@ -77,7 +239,6 @@ function resolveBackendCommand(port) {
     };
   }
 
-  // 3. Development fallback: workspace .venv Python
   const rootDir = path.resolve(__dirname, '..');
   const venvPy = isWin
     ? path.join(rootDir, '.venv', 'Scripts', 'python.exe')
@@ -125,6 +286,15 @@ function stopBackend() {
   backendProc = null;
 }
 
+ipcMain.handle('app:version', () => app.getVersion());
+ipcMain.handle('app:open-external', (_e, url) => shell.openExternal(url || latestFallbackUrl));
+ipcMain.handle('updater:check', () => triggerUpdateCheck(false));
+ipcMain.handle('updater:download', () => autoUpdater.downloadUpdate());
+ipcMain.handle('updater:install', () => {
+  stopBackend();
+  autoUpdater.quitAndInstall(false, true);
+});
+
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -159,6 +329,8 @@ async function createWindow() {
     await waitForBackend(port);
     if (mainWindow) {
       await mainWindow.loadURL(`http://127.0.0.1:${port}`);
+      // Auto-check for OTA updates 4 seconds after launch
+      setTimeout(() => triggerUpdateCheck(true), 4000);
     }
   } catch (err) {
     console.error(err);
@@ -169,7 +341,10 @@ async function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  setupAutoUpdater();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   stopBackend();
