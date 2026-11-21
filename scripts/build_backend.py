@@ -18,6 +18,7 @@ def main() -> None:
     sep = ";" if os.name == "nt" else ":"
     static_src = ROOT / "static"
     fonts_src = ROOT / "backend" / "fonts"
+    changelog_src = ROOT / "CHANGELOG.md"
 
     cmd = [
         sys.executable,
@@ -36,6 +37,7 @@ def main() -> None:
         str(BUILD_WORK),
         f"--add-data={static_src}{sep}static",
         f"--add-data={fonts_src}{sep}backend/fonts",
+        f"--add-data={changelog_src}{sep}.",
         "--collect-all",
         "faster_whisper",
         "--collect-all",

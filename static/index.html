@@ -19,6 +19,9 @@
       </div>
     </div>
     <div class="topbar-actions">
+      <button id="btnChangelog" class="btn btn-ghost" title="История обновлений">
+        <span>📋 Что нового</span>
+      </button>
       <button id="btnCheckUpdates" class="btn btn-ghost hidden" title="Проверить обновления по воздуху">
         <span>🔄 Обновления</span>
         <span id="appVersionPill" class="pill-count">v1.0.0</span>
@@ -287,6 +290,23 @@
         <button id="btnCloseHistory" class="btn btn-ghost btn-sm">✕</button>
       </div>
       <div id="historyList" class="history-list"></div>
+    </div>
+  </div>
+
+  <!-- Changelog Modal -->
+  <div id="changelogModal" class="modal hidden">
+    <div class="modal-backdrop" id="changelogBackdrop"></div>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <div>
+          <h3>📋 Что нового в TikCut Studio</h3>
+          <div class="modal-sub">История релизов и обновлений приложения</div>
+        </div>
+        <button id="btnCloseChangelog" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div id="changelogBody" class="changelog-body">
+        <div class="history-meta">Загрузка ченджлога...</div>
+      </div>
     </div>
   </div>
 

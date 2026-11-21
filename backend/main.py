@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.config import (
+    BASE_DIR,
     FONTS_DIR,
     JOBS_DIR,
     STATIC_DIR,
@@ -84,6 +85,46 @@ def api_config() -> Dict[str, Any]:
         "fonts": get_available_fonts(),
         "styles": get_subtitle_styles(),
     }
+
+
+def _parse_changelog_md(text: str) -> Dict[str, Any]:
+    releases = []
+    cur_rel = None
+    cur_sec = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        m_rel = re.match(r"^##\s+\[([^\]]+)\]\s*(?:[—–-]\s*(.+))?$", line)
+        if m_rel:
+            cur_rel = {
+                "version": m_rel.group(1).strip(),
+                "date": (m_rel.group(2) or "").strip(),
+                "sections": [],
+            }
+            releases.append(cur_rel)
+            cur_sec = None
+            continue
+
+        m_sec = re.match(r"^###\s+(.+)$", line)
+        if m_sec and cur_rel is not None:
+            cur_sec = {"title": m_sec.group(1).strip(), "items": []}
+            cur_rel["sections"].append(cur_sec)
+            continue
+
+        m_item = re.match(r"^(\s*)-\s+(.+)$", line)
+        if m_item and cur_sec is not None:
+            indent = len(m_item.group(1))
+            cur_sec["items"].append({"text": m_item.group(2).strip(), "sub": indent >= 2})
+
+    return {"releases": releases}
+
+
+@app.get("/api/changelog")
+def api_changelog() -> Dict[str, Any]:
+    cl_path = BASE_DIR / "CHANGELOG.md"
+    if not cl_path.exists():
+        return {"releases": []}
+    return _parse_changelog_md(cl_path.read_text(encoding="utf-8"))
 
 
 @app.post("/api/upload")

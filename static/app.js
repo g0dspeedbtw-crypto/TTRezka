@@ -61,6 +61,11 @@
 
   const btnHistory = document.getElementById('btnHistory');
   const historyCount = document.getElementById('historyCount');
+  const btnChangelog = document.getElementById('btnChangelog');
+  const changelogModal = document.getElementById('changelogModal');
+  const changelogBackdrop = document.getElementById('changelogBackdrop');
+  const btnCloseChangelog = document.getElementById('btnCloseChangelog');
+  const changelogBody = document.getElementById('changelogBody');
   const btnCheckUpdates = document.getElementById('btnCheckUpdates');
   const appVersionPill = document.getElementById('appVersionPill');
   const updateBanner = document.getElementById('updateBanner');
@@ -600,6 +605,63 @@
   });
   btnCloseHistory.addEventListener('click', () => historyDrawer.classList.add('hidden'));
   drawerBackdrop.addEventListener('click', () => historyDrawer.classList.add('hidden'));
+
+  // Changelog Modal
+  function formatInlineMd(str) {
+    let s = escapeHtml(str);
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    return s;
+  }
+
+  async function openChangelog() {
+    changelogModal.classList.remove('hidden');
+    changelogBody.innerHTML = '<div class="history-meta">Загрузка ченджлога...</div>';
+    try {
+      const res = await fetch('/api/changelog');
+      const data = await res.json();
+      const releases = data.releases || [];
+      if (!releases.length) {
+        changelogBody.innerHTML = '<div class="history-meta">Список изменений пока пуст.</div>';
+        return;
+      }
+      changelogBody.innerHTML = releases
+        .map(
+          (rel) => `
+          <div class="cl-release">
+            <div class="cl-release-head">
+              <span class="cl-version">v${escapeHtml(rel.version)}</span>
+              <span class="cl-date">${escapeHtml(rel.date || '')}</span>
+            </div>
+            ${(rel.sections || [])
+              .map(
+                (sec) => `
+                <div class="cl-section">
+                  <div class="cl-section-title">${escapeHtml(sec.title)}</div>
+                  <ul class="cl-list">
+                    ${(sec.items || [])
+                      .map(
+                        (it) => `<li class="${it.sub ? 'cl-sub' : ''}">${formatInlineMd(it.text)}</li>`
+                      )
+                      .join('')}
+                  </ul>
+                </div>
+              `
+              )
+              .join('')}
+          </div>
+        `
+        )
+        .join('');
+    } catch (_) {
+      changelogBody.innerHTML = '<div class="history-meta">Не удалось загрузить ченджлог.</div>';
+    }
+  }
+
+  btnChangelog.addEventListener('click', openChangelog);
+  btnCloseChangelog.addEventListener('click', () => changelogModal.classList.add('hidden'));
+  changelogBackdrop.addEventListener('click', () => changelogModal.classList.add('hidden'));
 
   function initDesktopUpdater() {
     const desk = window.tikcutDesktop;
