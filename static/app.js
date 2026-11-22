@@ -162,6 +162,13 @@
     const cfg = await res.json();
     state.fonts = cfg.fonts || [];
     state.styles = cfg.styles || [];
+    const savedSettings = cfg.settings || {};
+    if (geminiKeyInput && savedSettings.gemini_api_key) {
+      geminiKeyInput.value = savedSettings.gemini_api_key;
+    }
+    if (watermarkInput && savedSettings.watermark_text) {
+      watermarkInput.value = savedSettings.watermark_text;
+    }
     applyHardwareInfo(cfg.hardware);
 
     renderStyleCards();
@@ -172,12 +179,28 @@
       updateLivePreview();
     }, 620);
 
+    let saveSettingsTimer = null;
+    function persistSettings(patch) {
+      clearTimeout(saveSettingsTimer);
+      saveSettingsTimer = setTimeout(() => {
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        }).catch(() => {});
+      }, 450);
+    }
+
     if (geminiKeyInput) {
-      const savedKey = localStorage.getItem('tikcut_gemini_key') || '';
-      if (savedKey) geminiKeyInput.value = savedKey;
       geminiKeyInput.addEventListener('input', () => {
-        localStorage.setItem('tikcut_gemini_key', (geminiKeyInput.value || '').trim());
+        const val = (geminiKeyInput.value || '').trim();
+        persistSettings({ gemini_api_key: val });
         if (geminiKeyStatus) geminiKeyStatus.classList.add('hidden');
+      });
+    }
+    if (watermarkInput) {
+      watermarkInput.addEventListener('input', () => {
+        persistSettings({ watermark_text: (watermarkInput.value || '').trim() });
       });
     }
 
@@ -550,12 +573,28 @@
       const res = await fetch('/api/music', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки трека');
-      if (geminiKeyInput) {
-      const savedKey = localStorage.getItem('tikcut_gemini_key') || '';
-      if (savedKey) geminiKeyInput.value = savedKey;
+      let saveSettingsTimer = null;
+    function persistSettings(patch) {
+      clearTimeout(saveSettingsTimer);
+      saveSettingsTimer = setTimeout(() => {
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        }).catch(() => {});
+      }, 450);
+    }
+
+    if (geminiKeyInput) {
       geminiKeyInput.addEventListener('input', () => {
-        localStorage.setItem('tikcut_gemini_key', (geminiKeyInput.value || '').trim());
+        const val = (geminiKeyInput.value || '').trim();
+        persistSettings({ gemini_api_key: val });
         if (geminiKeyStatus) geminiKeyStatus.classList.add('hidden');
+      });
+    }
+    if (watermarkInput) {
+      watermarkInput.addEventListener('input', () => {
+        persistSettings({ watermark_text: (watermarkInput.value || '').trim() });
       });
     }
 
@@ -824,7 +863,8 @@
   function renderClips(job) {
     resultsSection.classList.remove('hidden');
     if (customClipBar) customClipBar.classList.remove('hidden');
-    resultsMeta.textContent = `Проект: ${job.original_filename} • Клипов: ${job.clips.length} • Распознано слов: ${job.words_count || 0}`;
+    const notice = job.ai_notice ? ` • ⚠️ ${job.ai_notice}` : '';
+    resultsMeta.textContent = `Проект: ${job.original_filename} • Клипов: ${job.clips.length} • Распознано слов: ${job.words_count || 0}${notice}`;
     if (job.clips.length > 0) {
       btnDownloadAllZip.href = `/api/jobs/${job.job_id}/download-all`;
       btnDownloadAllZip.classList.remove('hidden');

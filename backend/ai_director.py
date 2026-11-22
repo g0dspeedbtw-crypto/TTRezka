@@ -29,14 +29,24 @@ def _parse_ts(val: Any) -> Optional[float]:
         return None
 
 
-def _build_timestamped_transcript(segments: List[Dict[str, Any]], start_idx: int = 0, end_idx: Optional[int] = None) -> str:
+def _build_timestamped_transcript(
+    segments: List[Dict[str, Any]],
+    start_idx: int = 0,
+    end_idx: Optional[int] = None,
+    peak_times: Optional[List[float]] = None,
+) -> str:
     lines: List[str] = []
     slice_segs = segments[start_idx:end_idx]
+    peaks = peak_times or []
     for seg in slice_segs:
         txt = (seg.get("text") or "").strip()
         if not txt:
             continue
-        lines.append(f"[{_fmt_ts(seg['start'])}] {txt}")
+        s_t = float(seg.get("start", 0.0))
+        e_t = float(seg.get("end", s_t))
+        is_peak = any((s_t - 4.0) <= pt <= (e_t + 4.0) for pt in peaks)
+        marker = " 🔥[ПИК СМЕХА/РЕАКЦИИ]" if is_peak else ""
+        lines.append(f"[{_fmt_ts(s_t)}]{marker} {txt}")
     return "\n".join(lines)
 
 
@@ -111,46 +121,60 @@ def find_funny_moments_gemini(
     clip_count: int = 5,
     min_duration: float = 20.0,
     max_duration: float = 55.0,
+    peak_times: Optional[List[float]] = None,
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> List[Dict[str, Any]]:
-    """Use Google Gemini 2.5 Flash (free tier supported) to read the FULL Russian transcript and pick genuinely funny moments."""
+    """Use Google Gemini (free tier supported) to read the FULL Russian transcript + peak markers and pick genuinely funny moments."""
     if not segments or not api_key:
         return []
 
     if progress_cb:
         progress_cb(0.3, "🧠 Gemini ИИ читает весь транскрипт и ищет реально смешные моменты...")
 
-    full_transcript = _build_timestamped_transcript(segments)
-    # Trim safely if > 250k chars (~6+ hour stream)
+    full_transcript = _build_timestamped_transcript(segments, peak_times=peak_times)
     if len(full_transcript) > 250_000:
         full_transcript = full_transcript[:250_000]
 
-    prompt = _comedy_prompt(full_transcript, clip_count, int(min_duration), int(max_duration))
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key.strip()}"
+    ask_count = min(14, clip_count + 3)
+    prompt = _comedy_prompt(full_transcript, ask_count, int(min_duration), int(max_duration))
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.4,
+            "temperature": 0.45,
             "responseMimeType": "application/json",
         },
     }
 
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+    last_err = None
+    text = ""
+    for model_name in ("gemini-2.5-flash", "gemini-2.0-flash"):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            candidates_resp = data.get("candidates") or []
+            if candidates_resp:
+                text = (
+                    ((candidates_resp[0].get("content") or {}).get("parts") or [{}])[0].get("text")
+                    or ""
+                )
+                if text:
+                    break
+        except Exception as exc:
+            last_err = exc
+            continue
 
-    candidates_resp = data.get("candidates") or []
-    if not candidates_resp:
+    if not text:
+        if last_err:
+            raise last_err
         return []
-    text = (
-        ((candidates_resp[0].get("content") or {}).get("parts") or [{}])[0].get("text")
-        or ""
-    )
+
     items = _extract_json_array(text)
     return _convert_llm_items_to_highlights(
         items, segments, total_duration, clip_count, min_duration, max_duration, badge="🧠 Gemini Comedy AI"
@@ -164,6 +188,7 @@ def find_funny_moments_ollama(
     clip_count: int = 5,
     min_duration: float = 20.0,
     max_duration: float = 55.0,
+    peak_times: Optional[List[float]] = None,
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -200,7 +225,7 @@ def find_funny_moments_ollama(
                 0.2 + 0.7 * (ci / max(1, len(chunks))),
                 f"🧠 Локальный ИИ ({model_name}) ищет смешные моменты: часть {ci + 1}/{len(chunks)}...",
             )
-        chunk_txt = _build_timestamped_transcript(segments, s_i, e_i)
+        chunk_txt = _build_timestamped_transcript(segments, s_i, e_i, peak_times=peak_times)
         prompt = _comedy_prompt(chunk_txt, per_chunk, int(min_duration), int(max_duration))
         payload = {
             "model": model_name,

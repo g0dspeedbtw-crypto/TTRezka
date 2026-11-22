@@ -20,6 +20,8 @@ from backend.config import (
     UPLOADS_DIR,
     get_available_fonts,
     get_subtitle_styles,
+    load_settings,
+    save_settings,
 )
 from backend.hardware import get_hardware_info
 from backend.pipeline import (
@@ -102,6 +104,26 @@ class CheckGeminiKeyRequest(BaseModel):
     api_key: str = Field(..., min_length=5)
 
 
+class SettingsUpdateRequest(BaseModel):
+    gemini_api_key: Optional[str] = None
+    watermark_text: Optional[str] = None
+
+
+@app.get("/api/settings")
+def api_get_settings() -> Dict[str, Any]:
+    return load_settings()
+
+
+@app.post("/api/settings")
+def api_save_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
+    updates = {}
+    if req.gemini_api_key is not None:
+        updates["gemini_api_key"] = req.gemini_api_key.strip()
+    if req.watermark_text is not None:
+        updates["watermark_text"] = req.watermark_text.strip()
+    return save_settings(updates)
+
+
 @app.post("/api/check-gemini-key")
 def api_check_gemini_key(req: CheckGeminiKeyRequest) -> Dict[str, Any]:
     import json as _json
@@ -123,7 +145,8 @@ def api_check_gemini_key(req: CheckGeminiKeyRequest) -> Dict[str, Any]:
         )
         with urllib.request.urlopen(http_req, timeout=12) as resp:
             if resp.status == 200:
-                return {"ok": True, "message": "✅ Ключ работает! Gemini 2.5 Flash подключён"}
+                save_settings({"gemini_api_key": key})
+                return {"ok": True, "message": "✅ Ключ работает и сохранён! Gemini 2.5 Flash подключён"}
             return {"ok": False, "message": f"⚠️ Неожиданный ответ сервера (HTTP {resp.status})"}
     except urllib.error.HTTPError as e:
         body = ""
@@ -160,6 +183,7 @@ def api_config() -> Dict[str, Any]:
         "fonts": get_available_fonts(),
         "styles": get_subtitle_styles(),
         "hardware": get_hardware_info(),
+        "settings": load_settings(),
     }
 
 

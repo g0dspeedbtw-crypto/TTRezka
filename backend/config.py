@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -12,11 +13,35 @@ DATA_DIR = Path(os.environ.get("TIKCUT_DATA_DIR", str(BASE_DIR / "data")))
 UPLOADS_DIR = DATA_DIR / "uploads"
 JOBS_DIR = DATA_DIR / "jobs"
 MUSIC_DIR = DATA_DIR / "music"
+SETTINGS_FILE = DATA_DIR / "settings.json"
 FONTS_DIR = BASE_DIR / "backend" / "fonts"
 STATIC_DIR = BASE_DIR / "static"
 
 for _d in (DATA_DIR, UPLOADS_DIR, JOBS_DIR, MUSIC_DIR, FONTS_DIR, STATIC_DIR):
     _d.mkdir(parents=True, exist_ok=True)
+
+
+def load_settings() -> Dict[str, Any]:
+    if not SETTINGS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_settings(updates: Dict[str, Any]) -> Dict[str, Any]:
+    cur = load_settings()
+    for k, v in updates.items():
+        if v is None:
+            cur.pop(k, None)
+        else:
+            cur[k] = v
+    tmp = SETTINGS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(SETTINGS_FILE)
+    return cur
 
 
 # Font definitions: bundled fonts in backend/fonts/ with macOS system fallbacks

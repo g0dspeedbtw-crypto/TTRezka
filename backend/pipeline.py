@@ -8,9 +8,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.ai_director import find_funny_moments_gemini, find_funny_moments_ollama
-from backend.config import JOBS_DIR, MUSIC_DIR
+from backend.config import JOBS_DIR, MUSIC_DIR, load_settings
 from backend.hardware import get_hardware_info
-from backend.highlights import _make_clip_title, find_highlights
+from backend.highlights import (
+    _find_audio_peak_times,
+    _make_clip_title,
+    compute_audio_features,
+    find_highlights,
+)
 from backend.ollama_ranker import enhance_highlights_with_ollama
 from backend.remote import (
     download_clip_segment,
@@ -222,9 +227,17 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         def on_hl(frac: float, msg: str) -> None:
             _update_job(job_id, stage="analyzing", progress=int(22 + frac * 18), message=msg)
 
-        gemini_key = (options.get("gemini_api_key") or "").strip()
+        saved_cfg = load_settings()
+        gemini_key = (options.get("gemini_api_key") or saved_cfg.get("gemini_api_key") or "").strip()
         ollama_model = (options.get("ollama_model") or "").strip()
         highlights: List[Dict[str, Any]] = []
+
+        # Extract top YouTube Heatmap / Twitch Chat peak centers to guide the AI Comedy Director!
+        remote_heatmap = remote_meta.get("heatmap") or []
+        remote_peak_times: List[float] = []
+        if remote_heatmap:
+            for h in sorted(remote_heatmap, key=lambda x: float(x.get("value", 0.0)), reverse=True)[:18]:
+                remote_peak_times.append((float(h["start_time"]) + float(h["end_time"])) * 0.5)
 
         # Priority 1: Full-transcript AI Comedy Director (Gemini free tier or local RTX Ollama)
         if segments and gemini_key:
@@ -236,10 +249,14 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                     clip_count=clip_count,
                     min_duration=min_dur,
                     max_duration=max_dur,
+                    peak_times=remote_peak_times,
                     progress_cb=on_hl,
                 )
             except Exception as exc:
                 print(f"[ai_director] Gemini failed ({exc}), falling back to local detector")
+                _update_job(job_id, ai_notice=f"Gemini не ответил ({exc}) — использован локальный отбор")
+        elif gemini_key and not segments:
+            _update_job(job_id, ai_notice="У этого видео нет готовых субтитров на платформе — анализ по карте пересмотров/чату")
 
         if not highlights and segments and ollama_model:
             try:
@@ -250,6 +267,7 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                     clip_count=clip_count,
                     min_duration=min_dur,
                     max_duration=max_dur,
+                    peak_times=remote_peak_times,
                     progress_cb=on_hl,
                 )
             except Exception as exc:
@@ -428,9 +446,18 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             pct = int(52 + frac * 16)
             _update_job(job_id, stage="analyzing", progress=pct, message=msg)
 
-        gemini_key = (options.get("gemini_api_key") or "").strip()
+        saved_cfg = load_settings()
+        gemini_key = (options.get("gemini_api_key") or saved_cfg.get("gemini_api_key") or "").strip()
         ollama_model = (options.get("ollama_model") or "").strip()
         highlights: List[Dict[str, Any]] = []
+
+        # Compute audio laughter/excitement peaks to annotate transcript for the AI Comedy Director!
+        local_peak_times: List[float] = []
+        try:
+            _rms, _burst, _bsec = compute_audio_features(wav_path, bin_sec=0.25)
+            local_peak_times = _find_audio_peak_times(_rms, _burst, _bsec, top_k=20)
+        except Exception:
+            pass
 
         if segments and gemini_key:
             try:
@@ -441,10 +468,12 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                     clip_count=clip_count,
                     min_duration=min_dur,
                     max_duration=max_dur,
+                    peak_times=local_peak_times,
                     progress_cb=on_highlights,
                 )
             except Exception as exc:
                 print(f"[ai_director] Gemini failed ({exc}), falling back to local detector")
+                _update_job(job_id, ai_notice=f"Gemini не ответил ({exc}) — использован локальный отбор")
 
         if not highlights and segments and ollama_model:
             try:
@@ -455,6 +484,7 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                     clip_count=clip_count,
                     min_duration=min_dur,
                     max_duration=max_dur,
+                    peak_times=local_peak_times,
                     progress_cb=on_highlights,
                 )
             except Exception as exc:
