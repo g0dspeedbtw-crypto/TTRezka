@@ -1,5 +1,6 @@
 """100% local viral & funny moment detector for Russian videos and streams (Setup -> Peak -> Reaction)."""
 import math
+import random
 import re
 import subprocess
 import wave
@@ -163,6 +164,7 @@ def _score_window(
     global_burst_p85: float,
     scene_times: List[float],
     starts_after_pause: bool,
+    search_laughter: bool = True,
 ) -> Dict[str, Any]:
     duration = max(1.0, end - start)
 
@@ -240,15 +242,26 @@ def _score_window(
         if start < 10.0 or end > (total_duration - 10.0):
             edge_penalty = 0.14
 
-    raw_total = (
-        0.38 * audio_peak_score
-        + 0.32 * comedy_score
-        + 0.14 * hook_score
-        + 0.10 * speech_score
-        + 0.06 * visual_score
-        - ad_penalty
-        - edge_penalty
-    )
+    if search_laughter:
+        raw_total = (
+            0.40 * audio_peak_score
+            + 0.36 * comedy_score
+            + 0.12 * hook_score
+            + 0.08 * speech_score
+            + 0.04 * visual_score
+            - ad_penalty
+            - edge_penalty
+        )
+    else:
+        raw_total = (
+            0.28 * audio_peak_score
+            + 0.14 * comedy_score
+            + 0.30 * hook_score
+            + 0.18 * speech_score
+            + 0.10 * visual_score
+            - ad_penalty
+            - edge_penalty
+        )
     raw_total = max(0.05, min(1.0, raw_total))
     viral_score = int(round(min(99, max(48, 44 + raw_total * 56))))
 
@@ -322,6 +335,9 @@ def find_highlights(
     clip_count: int = 5,
     min_duration: float = 20.0,
     max_duration: float = 55.0,
+    search_laughter: bool = True,
+    shuffle_seed: int = 0,
+    exclude_ranges: Optional[List[Tuple[float, float]]] = None,
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -376,6 +392,7 @@ def find_highlights(
         sc = _score_window(
             start_t, end_t, total_duration, txt, w_list,
             rms, burst, bin_sec, global_mean, global_std, global_burst_p85, scene_times, after_pause,
+            search_laughter=search_laughter,
         )
         candidates.append(
             {
@@ -445,7 +462,20 @@ def find_highlights(
             w_slice = [w for w in words if w["start"] >= s_t and w["end"] <= e_t]
             _add_candidate(s_t, e_t, " ".join(w["word"] for w in w_slice), w_slice, True)
 
-    candidates.sort(key=lambda c: c["score_data"]["raw_total"], reverse=True)
+    if shuffle_seed:
+        rng = random.Random(int(shuffle_seed))
+        excl = exclude_ranges or []
+        for cand in candidates:
+            # Penalize previously shown moments so Shuffle picks genuinely fresh clips!
+            ov_prev = any(
+                (min(cand["end"], ex_e) - max(cand["start"], ex_s)) > 5.0
+                for ex_s, ex_e in excl
+            )
+            jitter = rng.uniform(-0.18, 0.22)
+            cand["_rank"] = cand["score_data"]["raw_total"] + jitter - (0.35 if ov_prev else 0.0)
+        candidates.sort(key=lambda c: c["_rank"], reverse=True)
+    else:
+        candidates.sort(key=lambda c: c["score_data"]["raw_total"], reverse=True)
     selected: List[Dict[str, Any]] = []
 
     def _overlap_ratio(a: Dict[str, Any], b: Dict[str, Any]) -> float:

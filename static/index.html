@@ -129,8 +129,8 @@
 
         <div class="form-grid">
           <div class="field">
-            <label for="clipCount">Количество клипов: <strong id="clipCountVal">5</strong></label>
-            <input id="clipCount" type="range" min="1" max="12" value="5" />
+            <label for="clipCount">Количество клипов (до 30): <strong id="clipCountVal">6</strong></label>
+            <input id="clipCount" type="range" min="1" max="30" value="6" />
           </div>
 
           <div class="field">
@@ -174,7 +174,23 @@
         </div>
 
         <div id="splitStreamSettings" class="sub-box hidden">
-          <div class="form-grid">
+          <div class="switch-grid" style="margin-bottom: 12px;">
+            <label class="switch-item">
+              <span class="switch-label">🖼️ Фото вместо вебки стримера</span>
+              <span class="switch"><input id="useWebcamPhotoToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+          </div>
+          <div id="webcamPhotoRow" class="field hidden">
+            <label for="webcamPhotoSelect">Выберите или загрузите фото стримера (PNG / JPG)</label>
+            <div class="music-row">
+              <select id="webcamPhotoSelect">
+                <option value="">Фото не выбрано</option>
+              </select>
+              <input id="avatarFileInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden />
+              <button id="btnUploadAvatar" type="button" class="btn btn-secondary btn-sm">+ Фото</button>
+            </div>
+          </div>
+          <div id="webcamCropRow" class="form-grid">
             <div class="field">
               <label for="webcamCorner">Где находится веб-камера стримера?</label>
               <select id="webcamCorner">
@@ -222,15 +238,31 @@
         </div>
 
         <div class="pro-box">
-          <div class="pro-box-title">⚡ Удержание, брендинг и музыка</div>
+          <div class="pro-box-title">🎛 Тумблеры поиска моментов, титров и эффектов</div>
           <div class="switch-grid">
+            <label class="switch-item">
+              <span class="switch-label">💬 Авто-субтитры</span>
+              <span class="switch"><input id="enableSubtitlesToggle" type="checkbox" checked /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">🏷 Заголовок-хук под момент</span>
+              <span class="switch"><input id="hookBannerToggle" type="checkbox" checked /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">💬 Поиск по активности чата</span>
+              <span class="switch"><input id="searchChatToggle" type="checkbox" checked /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">😂 Поиск по смеху стримера</span>
+              <span class="switch"><input id="searchLaughterToggle" type="checkbox" checked /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">🧠 ИИ-режиссёр (Gemini/Ollama)</span>
+              <span class="switch"><input id="useAiDirectorToggle" type="checkbox" checked /><span class="slider"></span></span>
+            </label>
             <label class="switch-item">
               <span class="switch-label">ЗАГЛАВНЫЕ БУКВЫ (CAPS)</span>
               <span class="switch"><input id="uppercaseToggle" type="checkbox" checked /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">🏷 Заголовок-хук (4 сек)</span>
-              <span class="switch"><input id="hookBannerToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
             <label class="switch-item">
               <span class="switch-label">✂️ Jump-Cuts (убрать паузы)</span>
@@ -244,6 +276,14 @@
               <span class="switch-label">🎨 Сочность и резкость</span>
               <span class="switch"><input id="videoEnhanceToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
+          </div>
+
+          <div class="field" style="margin-bottom: 12px;">
+            <label for="hookPositionSelect">Позиция заголовка-хука</label>
+            <select id="hookPositionSelect">
+              <option value="between" selected>Между вебкой/фото и видео</option>
+              <option value="top">Сверху экрана (первые 4.5 сек)</option>
+            </select>
           </div>
 
           <div class="pro-box ai-comedy-box">
@@ -303,7 +343,10 @@
           <div id="previewScreen" class="phone-screen mode-fill">
             <div class="preview-bg-blur"></div>
             <div class="preview-video-frame">
-              <div class="preview-split-cam hidden" id="previewSplitCam">🎥 ВЕБКА СТРИМЕРА</div>
+              <div class="preview-split-cam hidden" id="previewSplitCam">
+                <img id="previewSplitPhoto" class="preview-split-photo hidden" alt="" />
+                <span id="previewSplitCamText">🎥 ВЕБКА СТРИМЕРА</span>
+              </div>
               <div class="preview-ambient-orb"></div>
               <div class="preview-grid-lines"></div>
               <div class="preview-center-label" id="previewCenterLabel">9:16 HD 1080×1920</div>
@@ -311,7 +354,7 @@
 
             <!-- Live Watermark & Hook Banner Preview -->
             <div id="previewWatermark" class="preview-watermark hidden">@ttrezka</div>
-            <div id="previewHookBanner" class="preview-hook-banner hidden">ОН НЕ ОЖИДАЛ ТАКОГО!</div>
+            <div id="previewHookBanner" class="preview-hook-banner pos-between">ОН НЕ ОЖИДАЛ ТАКОГО!</div>
 
             <!-- Simulated TikTok right-side UI icons -->
             <div class="tiktok-ui-icons">
@@ -364,9 +407,14 @@
           <h2>Готовые TikTok нарезки 9:16</h2>
           <p id="resultsMeta" class="results-meta">Отобраны самые динамичные и эмоциональные моменты</p>
         </div>
-        <a id="btnDownloadAllZip" class="btn btn-primary hidden" href="#" download>
-          📦 Скачать все (.zip)
-        </a>
+        <div class="results-header-actions">
+          <button id="btnShuffleMoments" type="button" class="btn btn-secondary hidden">
+            🎲 Перемешать (другие моменты)
+          </button>
+          <a id="btnDownloadAllZip" class="btn btn-primary hidden" href="#" download>
+            📦 Скачать все (.zip)
+          </a>
+        </div>
       </div>
 
       <div id="customClipBar" class="custom-clip-bar hidden">

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.config import (
+    AVATARS_DIR,
     BASE_DIR,
     FONTS_DIR,
     JOBS_DIR,
@@ -50,7 +51,7 @@ def _startup() -> None:
 
 
 class ProcessRequest(BaseModel):
-    clip_count: int = Field(default=5, ge=1, le=12)
+    clip_count: int = Field(default=6, ge=1, le=30)
     min_duration: float = Field(default=20.0, ge=8.0, le=90.0)
     max_duration: float = Field(default=55.0, ge=15.0, le=120.0)
     whisper_model: str = Field(default="small")
@@ -60,9 +61,13 @@ class ProcessRequest(BaseModel):
     crop_mode: str = Field(default="fill")
     position: str = Field(default="lower_third")
     uppercase: Optional[bool] = Field(default=None)
+    enable_subtitles: bool = Field(default=True)
     webcam_corner: str = Field(default="bottom_left")
     webcam_size: float = Field(default=0.28, ge=0.18, le=0.45)
-    show_hook_banner: bool = Field(default=False)
+    use_webcam_photo: bool = Field(default=False)
+    webcam_image_id: Optional[str] = Field(default=None)
+    show_hook_banner: bool = Field(default=True)
+    hook_position: str = Field(default="between")
     watermark_text: Optional[str] = Field(default=None)
     watermark_opacity: float = Field(default=0.55, ge=0.15, le=1.0)
     jump_cuts: bool = Field(default=False)
@@ -70,6 +75,10 @@ class ProcessRequest(BaseModel):
     bg_music_volume: float = Field(default=0.18, ge=0.05, le=0.5)
     target_fps: int = Field(default=30)
     video_enhance: bool = Field(default=False)
+    search_chat_activity: bool = Field(default=True)
+    search_laughter: bool = Field(default=True)
+    use_ai_director: bool = Field(default=True)
+    shuffle_seed: int = Field(default=0)
     ollama_model: Optional[str] = Field(default=None)
     gemini_api_key: Optional[str] = Field(default=None)
 
@@ -81,9 +90,13 @@ class RerenderRequest(BaseModel):
     crop_mode: str = Field(default="fill")
     position: str = Field(default="lower_third")
     uppercase: Optional[bool] = Field(default=None)
+    enable_subtitles: bool = Field(default=True)
     webcam_corner: str = Field(default="bottom_left")
     webcam_size: float = Field(default=0.28, ge=0.18, le=0.45)
-    show_hook_banner: bool = Field(default=False)
+    use_webcam_photo: bool = Field(default=False)
+    webcam_image_id: Optional[str] = Field(default=None)
+    show_hook_banner: bool = Field(default=True)
+    hook_position: str = Field(default="between")
     watermark_text: Optional[str] = Field(default=None)
     watermark_opacity: float = Field(default=0.55, ge=0.15, le=1.0)
     jump_cuts: bool = Field(default=False)
@@ -371,6 +384,43 @@ async def api_upload_music(file: UploadFile = File(...)) -> Dict[str, Any]:
                 break
             out.write(chunk)
     return {"id": fname, "name": safe_stem}
+
+
+@app.get("/api/avatars")
+def api_list_avatars() -> Dict[str, Any]:
+    items: List[Dict[str, Any]] = []
+    for p in sorted(AVATARS_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+            items.append({"id": p.name, "name": p.stem, "url": f"/api/avatars/{p.name}"})
+    return {"avatars": items}
+
+
+@app.post("/api/avatars")
+async def api_upload_avatar(file: UploadFile = File(...)) -> Dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Фото не выбрано")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=400, detail="Поддерживаются форматы: PNG, JPG, WEBP")
+    safe_stem = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ _-]+", "", Path(file.filename).stem).strip()[:40] or "streamer"
+    fname = f"{safe_stem}_{uuid.uuid4().hex[:6]}{ext}"
+    dest = AVATARS_DIR / fname
+    with dest.open("wb") as out:
+        while True:
+            chunk = await file.read(512 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    return {"id": fname, "name": safe_stem, "url": f"/api/avatars/{fname}"}
+
+
+@app.get("/api/avatars/{avatar_id}")
+def api_get_avatar(avatar_id: str) -> FileResponse:
+    safe_name = Path(avatar_id).name
+    p = AVATARS_DIR / safe_name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Фото не найдено")
+    return FileResponse(path=str(p))
 
 
 @app.get("/api/jobs/{job_id}/download-all")

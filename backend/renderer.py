@@ -501,6 +501,7 @@ def _build_video_framing_chain(
     clip_end: float,
     webcam_corner: str = "bottom_left",
     webcam_size: float = 0.28,
+    webcam_img_idx: Optional[int] = None,
 ) -> str:
     """Build FFmpeg filter chain producing [base] at 1080x1920."""
     if crop_mode == "blur_bg":
@@ -513,7 +514,16 @@ def _build_video_framing_chain(
         )
 
     if crop_mode == "split_stream":
-        # Top 37.5% (1080x720) = cropped streamer webcam, Bottom 62.5% (1080x1200) = gameplay
+        # Top 37.5% (1080x720) = custom streamer photo OR cropped streamer webcam
+        # Bottom 62.5% (1080x1200) = gameplay
+        if webcam_img_idx is not None:
+            return (
+                f"[{webcam_img_idx}:v]scale={VIDEO_W}:720:force_original_aspect_ratio=increase,"
+                f"crop={VIDEO_W}:720,setsar=1[cam];"
+                f"[0:v]scale={VIDEO_W}:1200:force_original_aspect_ratio=increase,"
+                f"crop={VIDEO_W}:1200,setsar=1[game];"
+                f"[cam][game]vstack=inputs=2,setsar=1[base];"
+            )
         w_frac = max(0.18, min(0.45, float(webcam_size or 0.28)))
         h_frac = min(0.55, w_frac * 1.15)
         x_expr = "0" if "left" in webcam_corner else f"iw*(1-{w_frac:.3f})"
@@ -558,9 +568,12 @@ def render_clip(
     crop_mode: str = "fill",
     position: str = "lower_third",
     uppercase: Optional[bool] = None,
+    enable_subtitles: bool = True,
     webcam_corner: str = "bottom_left",
     webcam_size: float = 0.28,
+    webcam_image_path: Optional[Path] = None,
     hook_text: Optional[str] = None,
+    hook_position: str = "between",
     watermark_text: Optional[str] = None,
     watermark_opacity: float = 0.55,
     jump_cuts: bool = False,
@@ -570,8 +583,9 @@ def render_clip(
     video_enhance: bool = False,
 ) -> Path:
     """
-    Render a 1080x1920 9:16 TikTok MP4 clip with word-by-word subtitles,
-    optional AI Face Tracking / Split-Screen, Hook Banner, Watermark, Jump-Cuts & Music Ducking.
+    Render a 1080x1920 9:16 TikTok MP4 clip with optional subtitles,
+    AI Face Tracking / Split-Screen (with webcam or custom photo),
+    Hook Banner (between webcam & video or top), Watermark, Jump-Cuts & Music Ducking.
     """
     style = SUBTITLE_STYLES.get(style_id, SUBTITLE_STYLES["hormozi"])
     font_path = resolve_font_path(font_id)
@@ -595,40 +609,50 @@ def render_clip(
             )
 
         clip_duration = max(0.5, work_end - work_start)
-        timeline = _build_subtitle_timeline(work_words, work_start, work_end)
-
-        blank_path = tmp_dir / "blank.png"
-        Image.new("RGBA", (SUB_CANVAS_W, SUB_CANVAS_H), (0, 0, 0, 0)).save(blank_path)
-
-        concat_lines: List[str] = ["ffconcat version 1.0"]
-        last_file = blank_path
-        for idx, item in enumerate(timeline):
-            dur = max(0.033, item["end"] - item["start"])
-            if item["words"]:
-                png_path = tmp_dir / f"sub_{idx:04d}.png"
-                frame_img = _render_subtitle_frame(
-                    item["words"], item["active_idx"], style, font_path, base_px, use_upper
-                )
-                frame_img.save(png_path)
-                last_file = png_path
-            else:
-                last_file = blank_path
-
-            concat_lines.append(f"file '{last_file.as_posix()}'")
-            concat_lines.append(f"duration {dur:.4f}")
-
-        concat_lines.append(f"file '{last_file.as_posix()}'")
-        concat_file = tmp_dir / "subs.ffconcat"
-        concat_file.write_text("\n".join(concat_lines), encoding="utf-8")
 
         # Build FFmpeg inputs dynamically
         inputs: List[str] = [
             "-ss", f"{work_start:.3f}",
             "-t", f"{clip_duration:.3f}",
             "-i", str(work_video),
-            "-f", "concat", "-safe", "0", "-i", str(concat_file),
         ]
-        next_idx = 2
+        next_idx = 1
+
+        sub_idx: Optional[int] = None
+        if enable_subtitles:
+            timeline = _build_subtitle_timeline(work_words, work_start, work_end)
+            blank_path = tmp_dir / "blank.png"
+            Image.new("RGBA", (SUB_CANVAS_W, SUB_CANVAS_H), (0, 0, 0, 0)).save(blank_path)
+
+            concat_lines: List[str] = ["ffconcat version 1.0"]
+            last_file = blank_path
+            for idx, item in enumerate(timeline):
+                dur = max(0.033, item["end"] - item["start"])
+                if item["words"]:
+                    png_path = tmp_dir / f"sub_{idx:04d}.png"
+                    frame_img = _render_subtitle_frame(
+                        item["words"], item["active_idx"], style, font_path, base_px, use_upper
+                    )
+                    frame_img.save(png_path)
+                    last_file = png_path
+                else:
+                    last_file = blank_path
+
+                concat_lines.append(f"file '{last_file.as_posix()}'")
+                concat_lines.append(f"duration {dur:.4f}")
+
+            concat_lines.append(f"file '{last_file.as_posix()}'")
+            concat_file = tmp_dir / "subs.ffconcat"
+            concat_file.write_text("\n".join(concat_lines), encoding="utf-8")
+            inputs.extend(["-f", "concat", "-safe", "0", "-i", str(concat_file)])
+            sub_idx = next_idx
+            next_idx += 1
+
+        webcam_img_idx: Optional[int] = None
+        if crop_mode == "split_stream" and webcam_image_path and Path(webcam_image_path).exists():
+            inputs.extend(["-loop", "1", "-t", f"{clip_duration:.3f}", "-i", str(webcam_image_path)])
+            webcam_img_idx = next_idx
+            next_idx += 1
 
         hook_idx: Optional[int] = None
         if hook_text and hook_text.strip():
@@ -661,6 +685,7 @@ def render_clip(
             clip_end=work_end,
             webcam_corner=webcam_corner,
             webcam_size=webcam_size,
+            webcam_img_idx=webcam_img_idx,
         )
         enhance_step = (
             "[base]eq=contrast=1.06:saturation=1.14,unsharp=5:5:0.65:5:5:0.0[base_e];"
@@ -669,16 +694,25 @@ def render_clip(
         )
         base_label = "base_e" if video_enhance else "base"
 
-        fc = (
-            f"{video_chain}"
-            f"{enhance_step}"
-            f"[1:v]fps={out_fps},format=rgba[sub];"
-            f"[{base_label}][sub]overlay=x=0:y={overlay_y}:shortest=1,fps={out_fps}[v_sub];"
-        )
-        cur_v = "v_sub"
+        fc = f"{video_chain}{enhance_step}"
+        if sub_idx is not None:
+            fc += (
+                f"[{sub_idx}:v]fps={out_fps},format=rgba[sub];"
+                f"[{base_label}][sub]overlay=x=0:y={overlay_y}:shortest=1,fps={out_fps}[v_sub];"
+            )
+            cur_v = "v_sub"
+        else:
+            fc += f"[{base_label}]fps={out_fps}[v_fps];"
+            cur_v = "v_fps"
 
         if hook_idx is not None:
-            fc += f"[{cur_v}][{hook_idx}:v]overlay=x=0:y=150:enable='between(t,0,4.0)'[v_hook];"
+            if hook_position == "between" and crop_mode == "split_stream":
+                # Centered right on the seam (y=720) between top webcam/photo and bottom video, visible throughout!
+                fc += f"[{cur_v}][{hook_idx}:v]overlay=x=0:y=590[v_hook];"
+            elif hook_position == "between":
+                fc += f"[{cur_v}][{hook_idx}:v]overlay=x=0:y=590:enable='between(t,0,4.5)'[v_hook];"
+            else:
+                fc += f"[{cur_v}][{hook_idx}:v]overlay=x=0:y=150:enable='between(t,0,4.5)'[v_hook];"
             cur_v = "v_hook"
 
         if wm_idx is not None:

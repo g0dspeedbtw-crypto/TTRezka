@@ -1,6 +1,7 @@
 """Zero-full-download analyzer & surgical clip downloader for YouTube / Twitch VODs."""
 import json
 import math
+import random
 import re
 import urllib.request
 from pathlib import Path
@@ -245,14 +246,18 @@ def find_remote_highlights(
     clip_count: int = 5,
     min_duration: float = 20.0,
     max_duration: float = 55.0,
+    search_chat_activity: bool = True,
+    search_laughter: bool = True,
+    shuffle_seed: int = 0,
+    exclude_ranges: Optional[List[Tuple[float, float]]] = None,
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Analyze a remote video or multi-hour stream WITHOUT downloading it!
-    Combines YouTube Most Replayed Heatmap + Russian transcript hooks + speech pacing.
+    Combines YouTube Most Replayed Heatmap / Twitch Chat Replay + Russian laughter/comedy hooks + pacing.
     """
     total_duration = float(remote_meta.get("duration") or 0)
-    heatmap = remote_meta.get("heatmap") or []
+    heatmap = (remote_meta.get("heatmap") or []) if search_chat_activity else []
     has_heatmap = len(heatmap) > 0
 
     if progress_cb:
@@ -269,7 +274,11 @@ def find_remote_highlights(
             if key in seen_ranges:
                 return
             seen_ranges.add(key)
-            sc = _score_remote_window(s_t, e_t, total_duration, txt, w_list, heatmap, after_pause)
+            sc = _score_remote_window(
+                s_t, e_t, total_duration, txt, w_list, heatmap, after_pause,
+                search_chat_activity=search_chat_activity,
+                search_laughter=search_laughter,
+            )
             candidates.append(
                 {
                     "start": round(s_t, 2),
@@ -391,7 +400,19 @@ def find_remote_highlights(
     if progress_cb:
         progress_cb(0.85, "Отбор лучших непересекающихся моментов...")
 
-    candidates.sort(key=lambda c: c["score_data"]["raw_total"], reverse=True)
+    if shuffle_seed:
+        rng = random.Random(int(shuffle_seed))
+        excl = exclude_ranges or []
+        for cand in candidates:
+            ov_prev = any(
+                (min(cand["end"], ex_e) - max(cand["start"], ex_s)) > 5.0
+                for ex_s, ex_e in excl
+            )
+            jitter = rng.uniform(-0.18, 0.22)
+            cand["_rank"] = cand["score_data"]["raw_total"] + jitter - (0.35 if ov_prev else 0.0)
+        candidates.sort(key=lambda c: c["_rank"], reverse=True)
+    else:
+        candidates.sort(key=lambda c: c["score_data"]["raw_total"], reverse=True)
     selected: List[Dict[str, Any]] = []
 
     def _overlap(a: Dict[str, Any], b: Dict[str, Any]) -> float:
@@ -441,9 +462,11 @@ def _score_remote_window(
     window_words: List[Dict[str, Any]],
     heatmap: List[Dict[str, Any]],
     starts_after_pause: bool,
+    search_chat_activity: bool = True,
+    search_laughter: bool = True,
 ) -> Dict[str, Any]:
     duration = max(1.0, end - start)
-    hm_score = _heatmap_score_in_window(heatmap, start, end)
+    hm_score = _heatmap_score_in_window(heatmap, start, end) if search_chat_activity else 0.0
 
     # Speech pacing
     wps = len(window_words) / duration
@@ -462,10 +485,16 @@ def _score_remote_window(
         if start < 12.0 or end > (total_duration - 12.0):
             edge_penalty = 0.14
 
-    if heatmap:
-        raw_total = 0.42 * hm_score + 0.34 * comedy_score + 0.14 * hook_score + 0.10 * speech_score - ad_penalty - edge_penalty
+    if heatmap and search_chat_activity:
+        if search_laughter:
+            raw_total = 0.42 * hm_score + 0.38 * comedy_score + 0.12 * hook_score + 0.08 * speech_score - ad_penalty - edge_penalty
+        else:
+            raw_total = 0.56 * hm_score + 0.12 * comedy_score + 0.20 * hook_score + 0.12 * speech_score - ad_penalty - edge_penalty
     else:
-        raw_total = 0.54 * comedy_score + 0.26 * hook_score + 0.20 * speech_score - ad_penalty - edge_penalty
+        if search_laughter:
+            raw_total = 0.60 * comedy_score + 0.22 * hook_score + 0.18 * speech_score - ad_penalty - edge_penalty
+        else:
+            raw_total = 0.22 * comedy_score + 0.48 * hook_score + 0.30 * speech_score - ad_penalty - edge_penalty
 
     raw_total = max(0.05, min(1.0, raw_total))
     viral_score = int(round(min(99, max(48, 44 + raw_total * 56))))

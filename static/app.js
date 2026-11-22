@@ -38,6 +38,12 @@
   const maxDuration = document.getElementById('maxDuration');
   const cropModeGroup = document.getElementById('cropModeGroup');
   const splitStreamSettings = document.getElementById('splitStreamSettings');
+  const useWebcamPhotoToggle = document.getElementById('useWebcamPhotoToggle');
+  const webcamPhotoRow = document.getElementById('webcamPhotoRow');
+  const webcamCropRow = document.getElementById('webcamCropRow');
+  const webcamPhotoSelect = document.getElementById('webcamPhotoSelect');
+  const avatarFileInput = document.getElementById('avatarFileInput');
+  const btnUploadAvatar = document.getElementById('btnUploadAvatar');
   const webcamCorner = document.getElementById('webcamCorner');
   const webcamSize = document.getElementById('webcamSize');
   const webcamSizeVal = document.getElementById('webcamSizeVal');
@@ -45,8 +51,13 @@
   const fontSelect = document.getElementById('fontSelect');
   const fontSize = document.getElementById('fontSize');
   const subPosition = document.getElementById('subPosition');
+  const enableSubtitlesToggle = document.getElementById('enableSubtitlesToggle');
   const uppercaseToggle = document.getElementById('uppercaseToggle');
   const hookBannerToggle = document.getElementById('hookBannerToggle');
+  const hookPositionSelect = document.getElementById('hookPositionSelect');
+  const searchChatToggle = document.getElementById('searchChatToggle');
+  const searchLaughterToggle = document.getElementById('searchLaughterToggle');
+  const useAiDirectorToggle = document.getElementById('useAiDirectorToggle');
   const jumpCutsToggle = document.getElementById('jumpCutsToggle');
   const fps60Toggle = document.getElementById('fps60Toggle');
   const videoEnhanceToggle = document.getElementById('videoEnhanceToggle');
@@ -68,6 +79,8 @@
 
   const previewScreen = document.getElementById('previewScreen');
   const previewSplitCam = document.getElementById('previewSplitCam');
+  const previewSplitPhoto = document.getElementById('previewSplitPhoto');
+  const previewSplitCamText = document.getElementById('previewSplitCamText');
   const previewCenterLabel = document.getElementById('previewCenterLabel');
   const previewWatermark = document.getElementById('previewWatermark');
   const previewHookBanner = document.getElementById('previewHookBanner');
@@ -83,6 +96,7 @@
 
   const resultsSection = document.getElementById('resultsSection');
   const resultsMeta = document.getElementById('resultsMeta');
+  const btnShuffleMoments = document.getElementById('btnShuffleMoments');
   const btnDownloadAllZip = document.getElementById('btnDownloadAllZip');
   const clipsGrid = document.getElementById('clipsGrid');
 
@@ -236,7 +250,26 @@
     }
 
     await refreshMusicList();
+    await refreshAvatarList();
     await refreshHistory();
+  }
+
+  async function refreshAvatarList() {
+    try {
+      const res = await fetch('/api/avatars');
+      const data = await res.json();
+      const prev = webcamPhotoSelect.value;
+      webcamPhotoSelect.innerHTML = '<option value="">Фото не выбрано</option>';
+      (data.avatars || []).forEach((a) => {
+        const opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = `🖼️ ${a.name}`;
+        webcamPhotoSelect.appendChild(opt);
+      });
+      if (prev) webcamPhotoSelect.value = prev;
+      else if (data.avatars && data.avatars.length > 0) webcamPhotoSelect.value = data.avatars[0].id;
+      updateLivePreview();
+    } catch (_) {}
   }
 
   function applyHardwareInfo(hw) {
@@ -319,9 +352,25 @@
 
     previewScreen.className = `phone-screen mode-${state.cropMode}`;
     liveSubBox.className = `live-sub-box pos-${subPosition.value}`;
-    previewSplitCam.classList.toggle('hidden', state.cropMode !== 'split_stream');
+    const subsEnabled = !enableSubtitlesToggle || enableSubtitlesToggle.checked;
+    liveSubBox.classList.toggle('hidden', !subsEnabled);
+
+    const isSplit = state.cropMode === 'split_stream';
+    previewSplitCam.classList.toggle('hidden', !isSplit);
+    const usePhoto = isSplit && useWebcamPhotoToggle && useWebcamPhotoToggle.checked && webcamPhotoSelect && webcamPhotoSelect.value;
+    if (previewSplitPhoto && previewSplitCamText) {
+      if (usePhoto) {
+        previewSplitPhoto.src = `/api/avatars/${encodeURIComponent(webcamPhotoSelect.value)}`;
+        previewSplitPhoto.classList.remove('hidden');
+        previewSplitCamText.classList.add('hidden');
+      } else {
+        previewSplitPhoto.classList.add('hidden');
+        previewSplitCamText.classList.remove('hidden');
+      }
+    }
+
     previewCenterLabel.textContent =
-      state.cropMode === 'split_stream'
+      isSplit
         ? '🎮 ГЕЙМПЛЕЙ / ЭКРАН'
         : state.cropMode === 'face_track'
         ? '🤖 AI FACE TRACK 9:16'
@@ -334,7 +383,10 @@
     } else {
       previewWatermark.classList.add('hidden');
     }
-    previewHookBanner.classList.toggle('hidden', !hookBannerToggle.checked);
+    const showHook = hookBannerToggle && hookBannerToggle.checked;
+    previewHookBanner.classList.toggle('hidden', !showHook);
+    const hPos = hookPositionSelect ? hookPositionSelect.value : 'between';
+    previewHookBanner.classList.toggle('pos-between', hPos === 'between');
 
     const sizePx = fontSize.value === 'small' ? 16 : fontSize.value === 'large' ? 23 : 19;
     const isUpper = uppercaseToggle.checked;
@@ -552,14 +604,56 @@
   webcamSize.addEventListener('input', () => {
     webcamSizeVal.textContent = `${webcamSize.value}%`;
   });
+  if (useWebcamPhotoToggle) {
+    useWebcamPhotoToggle.addEventListener('change', () => {
+      const on = useWebcamPhotoToggle.checked;
+      webcamPhotoRow.classList.toggle('hidden', !on);
+      webcamCropRow.classList.toggle('hidden', on);
+      updateLivePreview();
+    });
+  }
+  if (webcamPhotoSelect) {
+    webcamPhotoSelect.addEventListener('change', updateLivePreview);
+  }
+  if (btnUploadAvatar && avatarFileInput) {
+    btnUploadAvatar.addEventListener('click', () => avatarFileInput.click());
+    avatarFileInput.addEventListener('change', async () => {
+      const file = avatarFileInput.files && avatarFileInput.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      btnUploadAvatar.disabled = true;
+      try {
+        const res = await fetch('/api/avatars', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки фото');
+        await refreshAvatarList();
+        webcamPhotoSelect.value = data.id;
+        if (useWebcamPhotoToggle && !useWebcamPhotoToggle.checked) {
+          useWebcamPhotoToggle.checked = true;
+          webcamPhotoRow.classList.remove('hidden');
+          webcamCropRow.classList.add('hidden');
+        }
+        updateLivePreview();
+        showToast(`Фото «${data.name}» загружено!`);
+      } catch (err) {
+        showToast(err.message || 'Ошибка загрузки фото');
+      } finally {
+        btnUploadAvatar.disabled = false;
+        avatarFileInput.value = '';
+      }
+    });
+  }
   fontSelect.addEventListener('change', () => {
     state.selectedFont = fontSelect.value;
     updateLivePreview();
   });
   fontSize.addEventListener('change', updateLivePreview);
   subPosition.addEventListener('change', updateLivePreview);
+  if (enableSubtitlesToggle) enableSubtitlesToggle.addEventListener('change', updateLivePreview);
   uppercaseToggle.addEventListener('change', updateLivePreview);
   hookBannerToggle.addEventListener('change', updateLivePreview);
+  if (hookPositionSelect) hookPositionSelect.addEventListener('change', updateLivePreview);
   watermarkInput.addEventListener('input', updateLivePreview);
 
   btnUploadMusic.addEventListener('click', () => musicFileInput.click());
@@ -640,9 +734,9 @@
     }
   });
 
-  function getCurrentOptions() {
+  function getCurrentOptions(shuffleSeed = 0) {
     return {
-      clip_count: parseInt(clipCount.value, 10) || 5,
+      clip_count: parseInt(clipCount.value, 10) || 6,
       min_duration: parseFloat(minDuration.value) || 20,
       max_duration: parseFloat(maxDuration.value) || 55,
       whisper_model: whisperModel.value,
@@ -652,9 +746,13 @@
       crop_mode: state.cropMode,
       position: subPosition.value,
       uppercase: uppercaseToggle.checked,
+      enable_subtitles: enableSubtitlesToggle ? enableSubtitlesToggle.checked : true,
       webcam_corner: webcamCorner.value,
       webcam_size: (parseInt(webcamSize.value, 10) || 28) / 100.0,
+      use_webcam_photo: !!(useWebcamPhotoToggle && useWebcamPhotoToggle.checked),
+      webcam_image_id: webcamPhotoSelect ? webcamPhotoSelect.value || null : null,
       show_hook_banner: hookBannerToggle.checked,
+      hook_position: hookPositionSelect ? hookPositionSelect.value : 'between',
       watermark_text: (watermarkInput.value || '').trim() || null,
       watermark_opacity: 0.55,
       jump_cuts: jumpCutsToggle.checked,
@@ -662,9 +760,52 @@
       bg_music_volume: 0.18,
       target_fps: fps60Toggle && fps60Toggle.checked ? 60 : 30,
       video_enhance: !!(videoEnhanceToggle && videoEnhanceToggle.checked),
+      search_chat_activity: searchChatToggle ? searchChatToggle.checked : true,
+      search_laughter: searchLaughterToggle ? searchLaughterToggle.checked : true,
+      use_ai_director: useAiDirectorToggle ? useAiDirectorToggle.checked : true,
+      shuffle_seed: shuffleSeed,
       ollama_model: ollamaSelect ? ollamaSelect.value || null : null,
       gemini_api_key: geminiKeyInput ? (geminiKeyInput.value || '').trim() || null : null,
     };
+  }
+
+  async function runJobProcessing(shuffleSeed = 0) {
+    if (!state.currentJobId) return;
+    const opts = getCurrentOptions(shuffleSeed);
+    if (opts.max_duration < opts.min_duration) {
+      showToast('Максимальная длина должна быть больше минимальной');
+      return;
+    }
+
+    btnStart.disabled = true;
+    if (btnShuffleMoments) btnShuffleMoments.disabled = true;
+    progressSection.classList.remove('hidden');
+    procError.classList.add('hidden');
+    resultsSection.classList.add('hidden');
+
+    const res = await fetch(`/api/process/${state.currentJobId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.detail || 'Не удалось запустить обработку');
+      btnStart.disabled = false;
+      if (btnShuffleMoments) btnShuffleMoments.disabled = false;
+      return;
+    }
+    const job = await res.json();
+    updateJobUI(job);
+    startPolling(state.currentJobId);
+  }
+
+  if (btnShuffleMoments) {
+    btnShuffleMoments.addEventListener('click', () => {
+      const seed = Math.floor(Date.now() % 1000000) + 1;
+      showToast('🎲 Перемешиваем и подбираем другие моменты...');
+      runJobProcessing(seed);
+    });
   }
 
   function parseTimestampInput(str) {
@@ -715,34 +856,7 @@
   }
 
   // Start processing
-  btnStart.addEventListener('click', async () => {
-    if (!state.currentJobId) return;
-    const opts = getCurrentOptions();
-    if (opts.max_duration < opts.min_duration) {
-      showToast('Максимальная длина должна быть больше минимальной');
-      return;
-    }
-
-    btnStart.disabled = true;
-    progressSection.classList.remove('hidden');
-    procError.classList.add('hidden');
-    resultsSection.classList.add('hidden');
-
-    const res = await fetch(`/api/process/${state.currentJobId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(opts),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      showToast(err.detail || 'Не удалось запустить обработку');
-      btnStart.disabled = false;
-      return;
-    }
-    const job = await res.json();
-    updateJobUI(job);
-    startPolling(state.currentJobId);
-  });
+  btnStart.addEventListener('click', () => runJobProcessing(0));
 
   function startPolling(jobId) {
     clearInterval(state.pollTimer);
@@ -754,6 +868,7 @@
       if (job.status === 'completed' || job.status === 'failed') {
         clearInterval(state.pollTimer);
         btnStart.disabled = false;
+        if (btnShuffleMoments) btnShuffleMoments.disabled = false;
         refreshHistory();
       }
     }, 1200);
@@ -868,8 +983,10 @@
     if (job.clips.length > 0) {
       btnDownloadAllZip.href = `/api/jobs/${job.job_id}/download-all`;
       btnDownloadAllZip.classList.remove('hidden');
+      if (btnShuffleMoments) btnShuffleMoments.classList.remove('hidden');
     } else {
       btnDownloadAllZip.classList.add('hidden');
+      if (btnShuffleMoments) btnShuffleMoments.classList.add('hidden');
     }
     clipsGrid.innerHTML = '';
 

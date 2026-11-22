@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.ai_director import find_funny_moments_gemini, find_funny_moments_ollama
-from backend.config import JOBS_DIR, MUSIC_DIR, load_settings
+from backend.config import AVATARS_DIR, JOBS_DIR, MUSIC_DIR, load_settings
 from backend.hardware import get_hardware_info
 from backend.highlights import (
     _find_audio_peak_times,
@@ -51,6 +51,13 @@ def _resolve_music_path(bg_music_id: Optional[str]) -> Optional[Path]:
     if not bg_music_id:
         return None
     p = MUSIC_DIR / Path(bg_music_id).name
+    return p if p.exists() else None
+
+
+def _resolve_avatar_path(avatar_id: Optional[str]) -> Optional[Path]:
+    if not avatar_id:
+        return None
+    p = AVATARS_DIR / Path(avatar_id).name
     return p if p.exists() else None
 
 
@@ -144,6 +151,15 @@ def start_processing(job_id: str, options: Dict[str, Any]) -> None:
     if not job:
         raise ValueError("Job not found")
 
+    # Preserve previously shown clip ranges if user clicked "Shuffle" so we pick different moments!
+    prev_ranges = []
+    if int(options.get("shuffle_seed") or 0) > 0:
+        for c in job.get("clips") or []:
+            if "start" in c and "end" in c:
+                prev_ranges.append((float(c["start"]), float(c["end"])))
+    options = dict(options)
+    options["_exclude_ranges"] = prev_ranges
+
     is_url = job.get("source_type") == "url"
     _update_job(
         job_id,
@@ -156,6 +172,7 @@ def start_processing(job_id: str, options: Dict[str, Any]) -> None:
             else "Извлечение аудиодорожки из видео..."
         ),
         error=None,
+        ai_notice=None,
         options=options,
         clips=[],
     )
@@ -166,7 +183,8 @@ def start_processing(job_id: str, options: Dict[str, Any]) -> None:
 
 
 def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str, Any]:
-    show_hook = bool(options.get("show_hook_banner", False))
+    show_hook = bool(options.get("show_hook_banner", True))
+    use_photo = bool(options.get("use_webcam_photo", False))
     return {
         "style_id": options.get("subtitle_style", "hormozi"),
         "font_id": options.get("font_id", "montserrat"),
@@ -174,9 +192,12 @@ def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str
         "crop_mode": options.get("crop_mode", "fill"),
         "position": options.get("position", "lower_third"),
         "uppercase": options.get("uppercase", None),
+        "enable_subtitles": bool(options.get("enable_subtitles", True)),
         "webcam_corner": options.get("webcam_corner", "bottom_left"),
         "webcam_size": float(options.get("webcam_size", 0.28)),
+        "webcam_image_path": _resolve_avatar_path(options.get("webcam_image_id")) if use_photo else None,
         "hook_text": hook_title if show_hook else None,
+        "hook_position": options.get("hook_position", "between"),
         "watermark_text": (options.get("watermark_text") or "").strip() or None,
         "watermark_opacity": float(options.get("watermark_opacity", 0.55)),
         "jump_cuts": bool(options.get("jump_cuts", False)),
@@ -228,19 +249,25 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             _update_job(job_id, stage="analyzing", progress=int(22 + frac * 18), message=msg)
 
         saved_cfg = load_settings()
-        gemini_key = (options.get("gemini_api_key") or saved_cfg.get("gemini_api_key") or "").strip()
-        ollama_model = (options.get("ollama_model") or "").strip()
+        use_ai = bool(options.get("use_ai_director", True))
+        search_chat = bool(options.get("search_chat_activity", True))
+        search_laugh = bool(options.get("search_laughter", True))
+        shuffle_seed = int(options.get("shuffle_seed") or 0)
+        exclude_ranges = options.get("_exclude_ranges") or []
+
+        gemini_key = (options.get("gemini_api_key") or saved_cfg.get("gemini_api_key") or "").strip() if use_ai else ""
+        ollama_model = (options.get("ollama_model") or "").strip() if use_ai else ""
         highlights: List[Dict[str, Any]] = []
 
         # Extract top YouTube Heatmap / Twitch Chat peak centers to guide the AI Comedy Director!
-        remote_heatmap = remote_meta.get("heatmap") or []
+        remote_heatmap = (remote_meta.get("heatmap") or []) if search_chat else []
         remote_peak_times: List[float] = []
         if remote_heatmap:
             for h in sorted(remote_heatmap, key=lambda x: float(x.get("value", 0.0)), reverse=True)[:18]:
                 remote_peak_times.append((float(h["start_time"]) + float(h["end_time"])) * 0.5)
 
-        # Priority 1: Full-transcript AI Comedy Director (Gemini free tier or local RTX Ollama)
-        if segments and gemini_key:
+        # Priority 1: Full-transcript AI Comedy Director (unless shuffling to force fresh local picks)
+        if segments and gemini_key and shuffle_seed == 0:
             try:
                 highlights = find_funny_moments_gemini(
                     segments=segments,
@@ -255,10 +282,10 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             except Exception as exc:
                 print(f"[ai_director] Gemini failed ({exc}), falling back to local detector")
                 _update_job(job_id, ai_notice=f"Gemini не ответил ({exc}) — использован локальный отбор")
-        elif gemini_key and not segments:
+        elif gemini_key and not segments and shuffle_seed == 0:
             _update_job(job_id, ai_notice="У этого видео нет готовых субтитров на платформе — анализ по карте пересмотров/чату")
 
-        if not highlights and segments and ollama_model:
+        if not highlights and segments and ollama_model and shuffle_seed == 0:
             try:
                 highlights = find_funny_moments_ollama(
                     segments=segments,
@@ -273,7 +300,7 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             except Exception as exc:
                 print(f"[ai_director] Ollama failed ({exc}), falling back to local detector")
 
-        # Fallback: Local Heatmap / Twitch Chat / Russian Comedy Heuristic
+        # Fallback (or Shuffle mode): Local Heatmap / Twitch Chat / Russian Laughter Detector
         if not highlights:
             highlights = find_remote_highlights(
                 remote_meta=remote_meta,
@@ -282,6 +309,10 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 clip_count=clip_count,
                 min_duration=min_dur,
                 max_duration=max_dur,
+                search_chat_activity=search_chat,
+                search_laughter=search_laugh,
+                shuffle_seed=shuffle_seed,
+                exclude_ranges=exclude_ranges,
                 progress_cb=on_hl,
             )
 
@@ -414,29 +445,36 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             )
             extract_audio_wav(video_path, wav_path)
 
+        # Reuse cached local transcription on Shuffle so re-picking moments is instant!
         whisper_model = options.get("whisper_model", "small")
-        _update_job(
-            job_id,
-            stage="transcribing",
-            progress=10,
-            message=f"Запуск локального Whisper ({whisper_model}) для русского языка...",
-        )
+        if words_path.exists() and int(options.get("shuffle_seed") or 0) > 0:
+            cached_w = json.loads(words_path.read_text(encoding="utf-8"))
+            segments = cached_w.get("segments", [])
+            words = cached_w.get("words", [])
+            _update_job(job_id, stage="analyzing", progress=52, words_count=len(words), message="Перемешивание и поиск новых моментов...")
+        else:
+            _update_job(
+                job_id,
+                stage="transcribing",
+                progress=10,
+                message=f"Запуск локального Whisper ({whisper_model}) для русского языка...",
+            )
 
-        def on_transcribe(frac: float, msg: str) -> None:
-            pct = int(10 + frac * 42)
-            _update_job(job_id, stage="transcribing", progress=pct, message=msg)
+            def on_transcribe(frac: float, msg: str) -> None:
+                pct = int(10 + frac * 42)
+                _update_job(job_id, stage="transcribing", progress=pct, message=msg)
 
-        segments, words = transcribe_russian(
-            wav_path,
-            total_duration=total_duration,
-            model_size=whisper_model,
-            progress_cb=on_transcribe,
-        )
-        words_path.write_text(
-            json.dumps({"segments": segments, "words": words}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        _update_job(job_id, words_count=len(words))
+            segments, words = transcribe_russian(
+                wav_path,
+                total_duration=total_duration,
+                model_size=whisper_model,
+                progress_cb=on_transcribe,
+            )
+            words_path.write_text(
+                json.dumps({"segments": segments, "words": words}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            _update_job(job_id, words_count=len(words))
 
         clip_count = int(options.get("clip_count", 5))
         min_dur = float(options.get("min_duration", 20))
@@ -447,19 +485,25 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             _update_job(job_id, stage="analyzing", progress=pct, message=msg)
 
         saved_cfg = load_settings()
-        gemini_key = (options.get("gemini_api_key") or saved_cfg.get("gemini_api_key") or "").strip()
-        ollama_model = (options.get("ollama_model") or "").strip()
+        use_ai = bool(options.get("use_ai_director", True))
+        search_laugh = bool(options.get("search_laughter", True))
+        shuffle_seed = int(options.get("shuffle_seed") or 0)
+        exclude_ranges = options.get("_exclude_ranges") or []
+
+        gemini_key = (options.get("gemini_api_key") or saved_cfg.get("gemini_api_key") or "").strip() if use_ai else ""
+        ollama_model = (options.get("ollama_model") or "").strip() if use_ai else ""
         highlights: List[Dict[str, Any]] = []
 
         # Compute audio laughter/excitement peaks to annotate transcript for the AI Comedy Director!
         local_peak_times: List[float] = []
-        try:
-            _rms, _burst, _bsec = compute_audio_features(wav_path, bin_sec=0.25)
-            local_peak_times = _find_audio_peak_times(_rms, _burst, _bsec, top_k=20)
-        except Exception:
-            pass
+        if search_laugh:
+            try:
+                _rms, _burst, _bsec = compute_audio_features(wav_path, bin_sec=0.25)
+                local_peak_times = _find_audio_peak_times(_rms, _burst, _bsec, top_k=24)
+            except Exception:
+                pass
 
-        if segments and gemini_key:
+        if segments and gemini_key and shuffle_seed == 0:
             try:
                 highlights = find_funny_moments_gemini(
                     segments=segments,
@@ -475,7 +519,7 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 print(f"[ai_director] Gemini failed ({exc}), falling back to local detector")
                 _update_job(job_id, ai_notice=f"Gemini не ответил ({exc}) — использован локальный отбор")
 
-        if not highlights and segments and ollama_model:
+        if not highlights and segments and ollama_model and shuffle_seed == 0:
             try:
                 highlights = find_funny_moments_ollama(
                     segments=segments,
@@ -500,6 +544,9 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 clip_count=clip_count,
                 min_duration=min_dur,
                 max_duration=max_dur,
+                search_laughter=search_laugh,
+                shuffle_seed=shuffle_seed,
+                exclude_ranges=exclude_ranges,
                 progress_cb=on_highlights,
             )
 
