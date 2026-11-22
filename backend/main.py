@@ -449,7 +449,7 @@ def api_list_ads() -> Dict[str, Any]:
     audios: List[Dict[str, Any]] = []
     for p in sorted(ADS_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
         ext = p.suffix.lower()
-        if ext in {".png", ".jpg", ".jpeg", ".webp"}:
+        if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
             banners.append({"id": p.name, "name": p.stem, "url": f"/api/ads/{p.name}"})
         elif ext in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
             dur = 0.0
@@ -466,8 +466,8 @@ async def api_upload_ad_banner(file: UploadFile = File(...)) -> Dict[str, Any]:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Баннер не выбран")
     ext = Path(file.filename).suffix.lower()
-    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
-        raise HTTPException(status_code=400, detail="Поддерживаются форматы баннера: PNG, JPG, WEBP")
+    if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        raise HTTPException(status_code=400, detail="Поддерживаются форматы баннера: PNG, JPG, WEBP, GIF")
     safe_stem = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ _-]+", "", Path(file.filename).stem).strip()[:40] or "banner"
     fname = f"banner_{safe_stem}_{uuid.uuid4().hex[:6]}{ext}"
     dest = ADS_DIR / fname

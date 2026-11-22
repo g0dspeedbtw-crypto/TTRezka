@@ -616,38 +616,55 @@ def _insert_midroll_ad(
         check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
 
-    # 2. Composite dimmed freeze frame + centered ad banner with Pillow
+    # 2. Prepare dimmed freeze background; if banner is animated GIF, overlay it live in FFmpeg!
+    is_gif = ad_banner_path.suffix.lower() == ".gif"
     bg = Image.open(freeze_raw).convert("RGBA").resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
     dim = Image.new("RGBA", (VIDEO_W, VIDEO_H), (0, 0, 0, 118))
     bg = Image.alpha_composite(bg, dim)
 
-    banner = Image.open(ad_banner_path).convert("RGBA")
-    banner.thumbnail((940, 780), Image.LANCZOS)
-    bw, bh = banner.size
-    bx = (VIDEO_W - bw) // 2
-    by = (VIDEO_H - bh) // 2
-    bg.paste(banner, (bx, by), banner)
+    if not is_gif:
+        banner = Image.open(ad_banner_path).convert("RGBA")
+        banner.thumbnail((940, 780), Image.LANCZOS)
+        bw, bh = banner.size
+        bx = (VIDEO_W - bw) // 2
+        by = (VIDEO_H - bh) // 2
+        bg.paste(banner, (bx, by), banner)
 
     mid_frame = tmp_dir / "midroll_frame.png"
     bg.convert("RGB").save(mid_frame)
 
-    # 3. Single-pass FFmpeg filter_complex: [Part 1] + [Freeze+Ad+Voiceover] + [Part 2]
+    # 3. Single-pass FFmpeg filter_complex: [Part 1] + [Freeze+Ad(Static or Animated GIF)+Voiceover] + [Part 2]
     inputs: List[str] = [
         "-i", str(base_mp4),
         "-loop", "1", "-t", f"{pause_dur:.3f}", "-i", str(mid_frame),
     ]
+    next_i = 2
+    gif_i: Optional[int] = None
+    if is_gif:
+        inputs.extend(["-ignore_loop", "0", "-t", f"{pause_dur:.3f}", "-i", str(ad_banner_path)])
+        gif_i = next_i
+        next_i += 1
+
     if has_ad_audio:
         inputs.extend(["-i", str(ad_audio_path)])
-        ad_a_chain = f"[2:a]atrim=0:{pause_dur:.3f},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[ad_a];"
+        ad_a_chain = f"[{next_i}:a]atrim=0:{pause_dur:.3f},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[ad_a];"
     else:
         ad_a_chain = f"anullsrc=r=48000:cl=stereo:d={pause_dur:.3f}[ad_a];"
+
+    if gif_i is not None:
+        ad_v_chain = (
+            f"[{gif_i}:v]scale=940:780:force_original_aspect_ratio=decrease,format=rgba[gif_s];"
+            f"[1:v][gif_s]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1,fps={out_fps},format=yuv420p,setpts=PTS-STARTPTS[ad_v];"
+        )
+    else:
+        ad_v_chain = f"[1:v]fps={out_fps},format=yuv420p,setpts=PTS-STARTPTS[ad_v];"
 
     fc = (
         f"[0:v]split=2[v0a][v0b];"
         f"[0:a]asplit=2[a0a][a0b];"
         f"[v0a]trim=0:{mid_t:.3f},setpts=PTS-STARTPTS,fps={out_fps},format=yuv420p[v1];"
         f"[a0a]atrim=0:{mid_t:.3f},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a1];"
-        f"[1:v]fps={out_fps},format=yuv420p,setpts=PTS-STARTPTS[ad_v];"
+        f"{ad_v_chain}"
         f"{ad_a_chain}"
         f"[v0b]trim=start={mid_t:.3f},setpts=PTS-STARTPTS,fps={out_fps},format=yuv420p[v2];"
         f"[a0b]atrim=start={mid_t:.3f},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a2];"
@@ -810,10 +827,15 @@ def render_clip(
             next_idx += 1
 
         ad_bottom_idx: Optional[int] = None
+        ad_bottom_is_gif = False
         if has_bottom_ad:
-            ad_png = tmp_dir / "ad_bottom.png"
-            _prepare_banner_png(Path(ad_banner_path), 920, 175, ad_png)
-            inputs.extend(["-i", str(ad_png)])
+            if Path(ad_banner_path).suffix.lower() == ".gif":
+                ad_bottom_is_gif = True
+                inputs.extend(["-ignore_loop", "0", "-t", f"{clip_duration:.3f}", "-i", str(ad_banner_path)])
+            else:
+                ad_png = tmp_dir / "ad_bottom.png"
+                _prepare_banner_png(Path(ad_banner_path), 920, 175, ad_png)
+                inputs.extend(["-i", str(ad_png)])
             ad_bottom_idx = next_idx
             next_idx += 1
 
@@ -867,7 +889,13 @@ def render_clip(
             cur_v = "v_wm"
 
         if ad_bottom_idx is not None:
-            fc += f"[{cur_v}][{ad_bottom_idx}:v]overlay=x=(W-w)/2:y=H-h-68[v_ad];"
+            if ad_bottom_is_gif:
+                fc += (
+                    f"[{ad_bottom_idx}:v]scale=920:175:force_original_aspect_ratio=decrease,format=rgba[ad_gif];"
+                    f"[{cur_v}][ad_gif]overlay=x=(W-w)/2:y=H-h-68:shortest=1[v_ad];"
+                )
+            else:
+                fc += f"[{cur_v}][{ad_bottom_idx}:v]overlay=x=(W-w)/2:y=H-h-68[v_ad];"
             cur_v = "v_ad"
 
         # Audio chain (with optional auto-ducking background music)
