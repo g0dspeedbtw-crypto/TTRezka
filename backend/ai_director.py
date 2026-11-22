@@ -4,6 +4,8 @@ import re
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from backend.gemini_client import gemini_generate_text
+
 
 def _fmt_ts(sec: float) -> str:
     s = max(0, int(round(sec)))
@@ -137,44 +139,13 @@ def find_funny_moments_gemini(
 
     ask_count = min(14, clip_count + 3)
     prompt = _comedy_prompt(full_transcript, ask_count, int(min_duration), int(max_duration))
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.45,
-            "responseMimeType": "application/json",
-        },
-    }
 
-    last_err = None
-    text = ""
-    for model_name in ("gemini-2.5-flash", "gemini-2.0-flash"):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
-        try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-            candidates_resp = data.get("candidates") or []
-            if candidates_resp:
-                text = (
-                    ((candidates_resp[0].get("content") or {}).get("parts") or [{}])[0].get("text")
-                    or ""
-                )
-                if text:
-                    break
-        except Exception as exc:
-            last_err = exc
-            continue
-
-    if not text:
-        if last_err:
-            raise last_err
-        return []
-
+    text, _used_model = gemini_generate_text(
+        api_key=api_key,
+        prompt=prompt,
+        json_mode=True,
+        timeout=65,
+    )
     items = _extract_json_array(text)
     return _convert_llm_items_to_highlights(
         items, segments, total_duration, clip_count, min_duration, max_duration, badge="🧠 Gemini Comedy AI"
