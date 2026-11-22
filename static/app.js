@@ -53,6 +53,8 @@
   const ollamaRow = document.getElementById('ollamaRow');
   const ollamaSelect = document.getElementById('ollamaSelect');
   const geminiKeyInput = document.getElementById('geminiKeyInput');
+  const btnCheckGeminiKey = document.getElementById('btnCheckGeminiKey');
+  const geminiKeyStatus = document.getElementById('geminiKeyStatus');
   const customClipBar = document.getElementById('customClipBar');
   const customStartInput = document.getElementById('customStartInput');
   const customEndInput = document.getElementById('customEndInput');
@@ -175,6 +177,38 @@
       if (savedKey) geminiKeyInput.value = savedKey;
       geminiKeyInput.addEventListener('input', () => {
         localStorage.setItem('tikcut_gemini_key', (geminiKeyInput.value || '').trim());
+        if (geminiKeyStatus) geminiKeyStatus.classList.add('hidden');
+      });
+    }
+
+    if (btnCheckGeminiKey && geminiKeyInput && geminiKeyStatus) {
+      btnCheckGeminiKey.addEventListener('click', async () => {
+        const key = (geminiKeyInput.value || '').trim();
+        if (!key) {
+          geminiKeyStatus.textContent = '❌ Сначала вставьте API-ключ';
+          geminiKeyStatus.className = 'key-status err';
+          return;
+        }
+        btnCheckGeminiKey.disabled = true;
+        btnCheckGeminiKey.textContent = '⏳...';
+        geminiKeyStatus.textContent = 'Проверка подключения к Gemini 2.5 Flash...';
+        geminiKeyStatus.className = 'key-status';
+        try {
+          const res = await fetch('/api/check-gemini-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: key }),
+          });
+          const data = await res.json();
+          geminiKeyStatus.textContent = data.message || (data.ok ? '✅ Ключ работает!' : '❌ Ошибка проверки');
+          geminiKeyStatus.className = `key-status ${data.ok ? 'ok' : 'err'}`;
+        } catch (_) {
+          geminiKeyStatus.textContent = '⚠️ Ошибка сети при проверке ключа';
+          geminiKeyStatus.className = 'key-status err';
+        } finally {
+          btnCheckGeminiKey.disabled = false;
+          btnCheckGeminiKey.textContent = 'Проверить';
+        }
       });
     }
 
@@ -521,6 +555,38 @@
       if (savedKey) geminiKeyInput.value = savedKey;
       geminiKeyInput.addEventListener('input', () => {
         localStorage.setItem('tikcut_gemini_key', (geminiKeyInput.value || '').trim());
+        if (geminiKeyStatus) geminiKeyStatus.classList.add('hidden');
+      });
+    }
+
+    if (btnCheckGeminiKey && geminiKeyInput && geminiKeyStatus) {
+      btnCheckGeminiKey.addEventListener('click', async () => {
+        const key = (geminiKeyInput.value || '').trim();
+        if (!key) {
+          geminiKeyStatus.textContent = '❌ Сначала вставьте API-ключ';
+          geminiKeyStatus.className = 'key-status err';
+          return;
+        }
+        btnCheckGeminiKey.disabled = true;
+        btnCheckGeminiKey.textContent = '⏳...';
+        geminiKeyStatus.textContent = 'Проверка подключения к Gemini 2.5 Flash...';
+        geminiKeyStatus.className = 'key-status';
+        try {
+          const res = await fetch('/api/check-gemini-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: key }),
+          });
+          const data = await res.json();
+          geminiKeyStatus.textContent = data.message || (data.ok ? '✅ Ключ работает!' : '❌ Ошибка проверки');
+          geminiKeyStatus.className = `key-status ${data.ok ? 'ok' : 'err'}`;
+        } catch (_) {
+          geminiKeyStatus.textContent = '⚠️ Ошибка сети при проверке ключа';
+          geminiKeyStatus.className = 'key-status err';
+        } finally {
+          btnCheckGeminiKey.disabled = false;
+          btnCheckGeminiKey.textContent = 'Проверить';
+        }
       });
     }
 

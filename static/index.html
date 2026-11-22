@@ -253,7 +253,11 @@
                 <label for="geminiKeyInput">
                   Бесплатный Gemini API ключ (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">получить за 30 сек</a>)
                 </label>
-                <input id="geminiKeyInput" type="password" placeholder="AIza... (читает весь стрим за 3 сек, сохраняется локально)" autocomplete="off" />
+                <div class="music-row">
+                  <input id="geminiKeyInput" type="password" placeholder="AIza... (читает весь стрим за 3 сек)" autocomplete="off" />
+                  <button id="btnCheckGeminiKey" type="button" class="btn btn-secondary btn-sm">Проверить</button>
+                </div>
+                <div id="geminiKeyStatus" class="key-status hidden"></div>
               </div>
               <div class="field" id="ollamaRow">
                 <label for="ollamaSelect">Или локальный ИИ Ollama (на RTX 4060 Ti)</label>

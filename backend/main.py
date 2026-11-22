@@ -98,6 +98,51 @@ class ProbeUrlRequest(BaseModel):
     url: str = Field(..., min_length=8)
 
 
+class CheckGeminiKeyRequest(BaseModel):
+    api_key: str = Field(..., min_length=5)
+
+
+@app.post("/api/check-gemini-key")
+def api_check_gemini_key(req: CheckGeminiKeyRequest) -> Dict[str, Any]:
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    key = req.api_key.strip()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
+    payload = {
+        "contents": [{"parts": [{"text": "Ответь одним словом: ОК"}]}],
+        "generationConfig": {"maxOutputTokens": 8},
+    }
+    try:
+        http_req = urllib.request.Request(
+            url,
+            data=_json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(http_req, timeout=12) as resp:
+            if resp.status == 200:
+                return {"ok": True, "message": "✅ Ключ работает! Gemini 2.5 Flash подключён"}
+            return {"ok": False, "message": f"⚠️ Неожиданный ответ сервера (HTTP {resp.status})"}
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        low = body.lower()
+        if e.code == 400 and ("api_key_invalid" in low or "api key not valid" in low):
+            return {"ok": False, "message": "❌ Неверный API-ключ — проверьте, что скопировали его целиком"}
+        if "user location is not supported" in low or e.code == 403:
+            return {"ok": False, "message": "⚠️ Доступ ограничен в вашем регионе (для Gemini API нужен VPN) или нет прав"}
+        if e.code == 429:
+            return {"ok": False, "message": "⏳ Превышен лимит запросов (квота) — подождите минуту"}
+        return {"ok": False, "message": f"❌ Ошибка Gemini API (HTTP {e.code})"}
+    except Exception as exc:
+        return {"ok": False, "message": f"⚠️ Не удалось подключиться к Google API: {exc}"}
+
+
 @app.get("/api/health")
 def api_health() -> Dict[str, Any]:
     return {"ok": True, "app": "TikCut Studio"}
