@@ -5,6 +5,15 @@
 
 ---
 
+## [1.4.4] — 2026-11-22
+
+### ✨ Поддержка ключей Vertex AI Express Mode (`AQ....`)
+- **Автоопределение типа ключа Google**: теперь поддерживаются **оба** формата ключей:
+  - `AQ....` (Google Cloud Vertex AI Express Mode → `aiplatform.googleapis.com`)
+  - `AIza...` (Google AI Studio → `generativelanguage.googleapis.com`)
+
+---
+
 ## [1.4.3] — 2026-11-22
 
 ### 🛠 Исправление работы Gemini API-ключа на Windows и macOS

@@ -84,6 +84,11 @@ def discover_best_gemini_model(api_key: str) -> Tuple[str, List[str]]:
     return "gemini-2.5-flash", available
 
 
+def is_vertex_express_key(api_key: str) -> bool:
+    """Detect Google Cloud Vertex AI Express Mode API keys (start with 'AQ.')."""
+    return clean_api_key(api_key).startswith("AQ.")
+
+
 def gemini_generate_text(
     api_key: str,
     prompt: str,
@@ -93,13 +98,19 @@ def gemini_generate_text(
     timeout: int = 60,
 ) -> Tuple[str, str]:
     """
-    Generate text with Gemini REST API using certifi SSL context and automatic
-    model discovery/fallback. Returns (response_text, model_used).
+    Generate text with Gemini REST API — automatically supports BOTH:
+      - Google AI Studio keys (`AIza...`) -> generativelanguage.googleapis.com
+      - Vertex AI Express Mode keys (`AQ....`) -> aiplatform.googleapis.com
+    Uses certifi SSL context (Windows PyInstaller safe).
     """
     key = clean_api_key(api_key)
+    vertex_mode = is_vertex_express_key(key)
     models_to_try: List[str] = []
+
     if model_name:
         models_to_try.append(model_name)
+    elif vertex_mode:
+        models_to_try.extend(["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"])
     else:
         try:
             best, avail = discover_best_gemini_model(key)
@@ -122,35 +133,33 @@ def gemini_generate_text(
         gen_cfg["maxOutputTokens"] = max_tokens
 
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": gen_cfg,
     }
     raw_body = json.dumps(payload).encode("utf-8")
 
     last_err: Optional[Exception] = None
     for mdl in models_to_try[:4]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{mdl}:generateContent?key={key}"
+        if vertex_mode:
+            url = f"https://aiplatform.googleapis.com/v1/publishers/google/models/{mdl}:generateContent?key={key}"
+            headers = {"Content-Type": "application/json"}
+        else:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{mdl}:generateContent?key={key}"
+            headers = {"Content-Type": "application/json", "x-goog-api-key": key}
+
         try:
-            req = urllib.request.Request(
-                url,
-                data=raw_body,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": key,
-                },
-                method="POST",
-            )
+            req = urllib.request.Request(url, data=raw_body, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as resp:
                 data = json.loads(resp.read().decode("utf-8", errors="ignore"))
             cands = data.get("candidates") or []
             if cands:
                 text = (((cands[0].get("content") or {}).get("parts") or [{}])[0].get("text") or "").strip()
                 if text:
-                    return text, mdl
+                    label = f"{mdl} (Vertex AI)" if vertex_mode else mdl
+                    return text, label
         except urllib.error.HTTPError as e:
             code, msg = _extract_google_error(e)
             last_err = RuntimeError(f"HTTP {code}: {msg}")
-            # Stop retrying other models if key itself is invalid or region-blocked
             low = msg.lower()
             if code in (401, 403) or "api key not valid" in low or "api_key_invalid" in low or "location is not supported" in low:
                 raise last_err
