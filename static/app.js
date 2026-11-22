@@ -52,6 +52,11 @@
   const videoEnhanceToggle = document.getElementById('videoEnhanceToggle');
   const ollamaRow = document.getElementById('ollamaRow');
   const ollamaSelect = document.getElementById('ollamaSelect');
+  const geminiKeyInput = document.getElementById('geminiKeyInput');
+  const customClipBar = document.getElementById('customClipBar');
+  const customStartInput = document.getElementById('customStartInput');
+  const customEndInput = document.getElementById('customEndInput');
+  const btnCutCustom = document.getElementById('btnCutCustom');
   const hwBadge = document.getElementById('hwBadge');
   const watermarkInput = document.getElementById('watermarkInput');
   const bgMusicSelect = document.getElementById('bgMusicSelect');
@@ -165,6 +170,14 @@
       updateLivePreview();
     }, 620);
 
+    if (geminiKeyInput) {
+      const savedKey = localStorage.getItem('tikcut_gemini_key') || '';
+      if (savedKey) geminiKeyInput.value = savedKey;
+      geminiKeyInput.addEventListener('input', () => {
+        localStorage.setItem('tikcut_gemini_key', (geminiKeyInput.value || '').trim());
+      });
+    }
+
     await refreshMusicList();
     await refreshHistory();
   }
@@ -179,15 +192,18 @@
       whisperModel.value = 'large-v3-turbo';
     }
     const models = hw.ollama_models || [];
-    if (models.length > 0 && ollamaRow && ollamaSelect) {
-      ollamaRow.classList.remove('hidden');
-      ollamaSelect.innerHTML = '<option value="">Выкл (стандартный быстрый анализ)</option>';
+    if (models.length > 0 && ollamaSelect) {
+      ollamaSelect.innerHTML = '<option value="">Выкл (стандартный локальный анализ)</option>';
       models.forEach((m) => {
         const opt = document.createElement('option');
         opt.value = m;
         opt.textContent = `🧠 ${m} (локально на GPU)`;
         ollamaSelect.appendChild(opt);
       });
+      // Auto-select first installed local Ollama model if no Gemini key is set!
+      if (!localStorage.getItem('tikcut_gemini_key')) {
+        ollamaSelect.value = models[0];
+      }
     }
   }
 
@@ -500,7 +516,15 @@
       const res = await fetch('/api/music', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки трека');
-      await refreshMusicList();
+      if (geminiKeyInput) {
+      const savedKey = localStorage.getItem('tikcut_gemini_key') || '';
+      if (savedKey) geminiKeyInput.value = savedKey;
+      geminiKeyInput.addEventListener('input', () => {
+        localStorage.setItem('tikcut_gemini_key', (geminiKeyInput.value || '').trim());
+      });
+    }
+
+    await refreshMusicList();
       bgMusicSelect.value = data.id;
       showToast(`Трек «${data.name}» добавлен!`);
     } catch (err) {
@@ -534,7 +558,55 @@
       target_fps: fps60Toggle && fps60Toggle.checked ? 60 : 30,
       video_enhance: !!(videoEnhanceToggle && videoEnhanceToggle.checked),
       ollama_model: ollamaSelect ? ollamaSelect.value || null : null,
+      gemini_api_key: geminiKeyInput ? (geminiKeyInput.value || '').trim() || null : null,
     };
+  }
+
+  function parseTimestampInput(str) {
+    const clean = (str || '').trim();
+    if (!clean) return NaN;
+    const parts = clean.split(':').map((p) => parseFloat(p));
+    if (parts.some((n) => Number.isNaN(n))) return NaN;
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    return parts[0];
+  }
+
+  if (btnCutCustom) {
+    btnCutCustom.addEventListener('click', async () => {
+      if (!state.currentJobId) return;
+      const s = parseTimestampInput(customStartInput.value);
+      const e = parseTimestampInput(customEndInput.value);
+      if (Number.isNaN(s) || Number.isNaN(e) || e <= s + 2) {
+        showToast('Введите корректные таймкоды, например: 12:30 и 13:05');
+        return;
+      }
+      btnCutCustom.disabled = true;
+      btnCutCustom.textContent = '⏳ Нарезка...';
+      try {
+        const opts = getCurrentOptions();
+        const res = await fetch(`/api/jobs/${state.currentJobId}/custom-clip`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...opts, start_sec: s, end_sec: e }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || 'Ошибка нарезки момента');
+        const jobRes = await fetch(`/api/jobs/${state.currentJobId}`);
+        if (jobRes.ok) {
+          const updatedJob = await jobRes.json();
+          renderClips(updatedJob);
+        }
+        customStartInput.value = '';
+        customEndInput.value = '';
+        showToast('Свой момент успешно вырезан в 9:16 с субтитрами!');
+      } catch (err) {
+        showToast(err.message || 'Ошибка нарезки');
+      } finally {
+        btnCutCustom.disabled = false;
+        btnCutCustom.textContent = 'Вырезать 9:16';
+      }
+    });
   }
 
   // Start processing
@@ -685,6 +757,7 @@
 
   function renderClips(job) {
     resultsSection.classList.remove('hidden');
+    if (customClipBar) customClipBar.classList.remove('hidden');
     resultsMeta.textContent = `Проект: ${job.original_filename} • Клипов: ${job.clips.length} • Распознано слов: ${job.words_count || 0}`;
     if (job.clips.length > 0) {
       btnDownloadAllZip.href = `/api/jobs/${job.job_id}/download-all`;

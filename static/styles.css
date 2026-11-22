@@ -1321,6 +1321,54 @@ input[type="range"] {
   transform: translateX(16px);
 }
 
+.ai-comedy-box {
+  border-color: rgba(124, 92, 255, 0.32);
+  background: rgba(124, 92, 255, 0.06);
+  margin-top: 10px;
+  margin-bottom: 14px;
+}
+.ai-comedy-box a {
+  color: var(--accent-2);
+  text-decoration: none;
+}
+.ai-comedy-box a:hover {
+  text-decoration: underline;
+}
+.ai-comedy-box input[type="password"] {
+  background: rgba(10, 12, 22, 0.85);
+  border: 1px solid var(--border-hi);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  outline: none;
+}
+.ai-comedy-box input[type="password"]:focus {
+  border-color: var(--accent-2);
+}
+
+.custom-clip-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border);
+}
+.custom-clip-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #dce4ff;
+}
+.custom-clip-bar input[type="text"] {
+  width: 150px;
+  padding: 8px 11px;
+  font-size: 13px;
+}
+
 .btn-update-ready {
   background: linear-gradient(135deg, #00e68a, #00c4ff) !important;
   color: #061214 !important;

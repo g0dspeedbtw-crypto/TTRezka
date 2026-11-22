@@ -246,11 +246,22 @@
             </label>
           </div>
 
-          <div id="ollamaRow" class="field hidden">
-            <label for="ollamaSelect">🧠 Локальный ИИ-продюсер (Ollama на вашей RTX GPU)</label>
-            <select id="ollamaSelect">
-              <option value="">Выкл (стандартный быстрый анализ)</option>
-            </select>
+          <div class="pro-box ai-comedy-box">
+            <div class="pro-box-title">🧠 ИИ-режиссёр смешных моментов (понимает юмор, иронию и панчлайны)</div>
+            <div class="form-grid">
+              <div class="field">
+                <label for="geminiKeyInput">
+                  Бесплатный Gemini API ключ (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">получить за 30 сек</a>)
+                </label>
+                <input id="geminiKeyInput" type="password" placeholder="AIza... (читает весь стрим за 3 сек, сохраняется локально)" autocomplete="off" />
+              </div>
+              <div class="field" id="ollamaRow">
+                <label for="ollamaSelect">Или локальный ИИ Ollama (на RTX 4060 Ti)</label>
+                <select id="ollamaSelect">
+                  <option value="">Ollama не запущен (команда: ollama run qwen2.5:7b)</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           <div class="form-grid">
@@ -352,6 +363,13 @@
         <a id="btnDownloadAllZip" class="btn btn-primary hidden" href="#" download>
           📦 Скачать все (.zip)
         </a>
+      </div>
+
+      <div id="customClipBar" class="custom-clip-bar hidden">
+        <span class="custom-clip-label">✂️ Вырезать свой момент:</span>
+        <input id="customStartInput" type="text" placeholder="От (напр. 12:30)" />
+        <input id="customEndInput" type="text" placeholder="До (напр. 13:05)" />
+        <button id="btnCutCustom" type="button" class="btn btn-secondary btn-sm">Вырезать 9:16</button>
       </div>
 
       <div id="clipsGrid" class="clips-grid"></div>

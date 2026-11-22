@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from backend.ai_director import find_funny_moments_gemini, find_funny_moments_ollama
 from backend.config import JOBS_DIR, MUSIC_DIR
 from backend.hardware import get_hardware_info
 from backend.highlights import _make_clip_title, find_highlights
@@ -221,20 +222,50 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         def on_hl(frac: float, msg: str) -> None:
             _update_job(job_id, stage="analyzing", progress=int(22 + frac * 18), message=msg)
 
-        highlights = find_remote_highlights(
-            remote_meta=remote_meta,
-            segments=segments,
-            words=words,
-            clip_count=clip_count,
-            min_duration=min_dur,
-            max_duration=max_dur,
-            progress_cb=on_hl,
-        )
-
+        gemini_key = (options.get("gemini_api_key") or "").strip()
         ollama_model = (options.get("ollama_model") or "").strip()
-        if ollama_model and words:
-            _update_job(job_id, stage="analyzing", progress=39, message=f"Усиление отбора и заголовков через локальный Ollama ({ollama_model})...")
-            highlights = enhance_highlights_with_ollama(highlights, ollama_model)
+        highlights: List[Dict[str, Any]] = []
+
+        # Priority 1: Full-transcript AI Comedy Director (Gemini free tier or local RTX Ollama)
+        if segments and gemini_key:
+            try:
+                highlights = find_funny_moments_gemini(
+                    segments=segments,
+                    total_duration=float(remote_meta.get("duration") or 0),
+                    api_key=gemini_key,
+                    clip_count=clip_count,
+                    min_duration=min_dur,
+                    max_duration=max_dur,
+                    progress_cb=on_hl,
+                )
+            except Exception as exc:
+                print(f"[ai_director] Gemini failed ({exc}), falling back to local detector")
+
+        if not highlights and segments and ollama_model:
+            try:
+                highlights = find_funny_moments_ollama(
+                    segments=segments,
+                    total_duration=float(remote_meta.get("duration") or 0),
+                    model_name=ollama_model,
+                    clip_count=clip_count,
+                    min_duration=min_dur,
+                    max_duration=max_dur,
+                    progress_cb=on_hl,
+                )
+            except Exception as exc:
+                print(f"[ai_director] Ollama failed ({exc}), falling back to local detector")
+
+        # Fallback: Local Heatmap / Twitch Chat / Russian Comedy Heuristic
+        if not highlights:
+            highlights = find_remote_highlights(
+                remote_meta=remote_meta,
+                segments=segments,
+                words=words,
+                clip_count=clip_count,
+                min_duration=min_dur,
+                max_duration=max_dur,
+                progress_cb=on_hl,
+            )
 
         whisper_model = options.get("whisper_model", "small")
         rendered_clips: List[Dict[str, Any]] = []
@@ -397,22 +428,50 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             pct = int(52 + frac * 16)
             _update_job(job_id, stage="analyzing", progress=pct, message=msg)
 
-        highlights = find_highlights(
-            video_path=video_path,
-            wav_path=wav_path,
-            total_duration=total_duration,
-            segments=segments,
-            words=words,
-            clip_count=clip_count,
-            min_duration=min_dur,
-            max_duration=max_dur,
-            progress_cb=on_highlights,
-        )
-
+        gemini_key = (options.get("gemini_api_key") or "").strip()
         ollama_model = (options.get("ollama_model") or "").strip()
-        if ollama_model and words:
-            _update_job(job_id, stage="analyzing", progress=66, message=f"Усиление отбора и заголовков через локальный Ollama ({ollama_model})...")
-            highlights = enhance_highlights_with_ollama(highlights, ollama_model)
+        highlights: List[Dict[str, Any]] = []
+
+        if segments and gemini_key:
+            try:
+                highlights = find_funny_moments_gemini(
+                    segments=segments,
+                    total_duration=total_duration,
+                    api_key=gemini_key,
+                    clip_count=clip_count,
+                    min_duration=min_dur,
+                    max_duration=max_dur,
+                    progress_cb=on_highlights,
+                )
+            except Exception as exc:
+                print(f"[ai_director] Gemini failed ({exc}), falling back to local detector")
+
+        if not highlights and segments and ollama_model:
+            try:
+                highlights = find_funny_moments_ollama(
+                    segments=segments,
+                    total_duration=total_duration,
+                    model_name=ollama_model,
+                    clip_count=clip_count,
+                    min_duration=min_dur,
+                    max_duration=max_dur,
+                    progress_cb=on_highlights,
+                )
+            except Exception as exc:
+                print(f"[ai_director] Ollama failed ({exc}), falling back to local detector")
+
+        if not highlights:
+            highlights = find_highlights(
+                video_path=video_path,
+                wav_path=wav_path,
+                total_duration=total_duration,
+                segments=segments,
+                words=words,
+                clip_count=clip_count,
+                min_duration=min_dur,
+                max_duration=max_dur,
+                progress_cb=on_highlights,
+            )
 
         hw = get_hardware_info()
         workers = int(hw.get("max_parallel_renders", 1))
@@ -649,3 +708,121 @@ def rerender_single_clip(
         _save_job(live_job)
 
     return updated_clip
+
+
+def create_custom_clip(
+    job_id: str,
+    start_sec: float,
+    end_sec: float,
+    options: Dict[str, Any],
+    custom_title: str = "",
+) -> Dict[str, Any]:
+    """Cut & render any custom [start_sec, end_sec] timestamp from a loaded video or remote YouTube/Twitch link."""
+    job = get_job(job_id)
+    if not job:
+        raise ValueError("Проект не найден")
+    if end_sec <= start_sec + 2.0:
+        raise ValueError("Конец клипа должен быть хотя бы на 2 секунды позже начала")
+
+    jdir = _job_dir(job_id)
+    clip_num = len(job.get("clips", [])) + 1
+    clip_id = f"clip_custom_{int(time.time())}"
+    out_mp4 = jdir / f"{clip_id}.mp4"
+    out_thumb = jdir / f"{clip_id}.jpg"
+    whisper_model = options.get("whisper_model", "small")
+
+    if job.get("source_type") == "url":
+        raw_seg_path = download_clip_segment(
+            url=job["remote_url"],
+            start=start_sec,
+            end=end_sec,
+            output_mp4=jdir / f"raw_{clip_id}.mp4",
+        )
+        seg_meta = probe_video(raw_seg_path)
+        seg_dur = float(seg_meta.get("duration") or (end_sec - start_sec))
+        clip_wav = jdir / f"raw_{clip_id}.wav"
+        extract_audio_wav(raw_seg_path, clip_wav)
+        clip_segs, clip_words = transcribe_russian(clip_wav, total_duration=seg_dur, model_size=whisper_model)
+        (jdir / f"{clip_id}_words.json").write_text(
+            json.dumps({"segments": clip_segs, "words": clip_words}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        transcript_txt = " ".join(s["text"] for s in clip_segs).strip()
+        title = custom_title.strip() or _make_clip_title(transcript_txt, clip_num)
+        r_kwargs = _extract_render_kwargs(options, title)
+        render_clip(
+            source_video=raw_seg_path,
+            output_mp4=out_mp4,
+            thumb_jpg=out_thumb,
+            clip_start=0.0,
+            clip_end=seg_dur,
+            words=clip_words,
+            **r_kwargs,
+        )
+        new_clip = {
+            "id": clip_id,
+            "index": clip_num,
+            "start": round(start_sec, 2),
+            "end": round(end_sec, 2),
+            "duration": round(seg_dur, 2),
+            "title": title,
+            "hook_text": title,
+            "transcript": transcript_txt,
+            "viral_score": 95,
+            "tags": ["✂️ Ручной выбор"],
+            "tiktok_caption": generate_tiktok_caption(title, transcript_txt, ["✂️ Ручной выбор"], job.get("original_filename", "")),
+            "raw_segment_path": str(raw_seg_path),
+            "raw_segment_duration": round(seg_dur, 2),
+            "trim_start": 0.0,
+            "trim_end": round(seg_dur, 2),
+            "version": int(time.time()),
+            "file_size_mb": round(out_mp4.stat().st_size / (1024 * 1024), 2),
+        }
+    else:
+        video_path = Path(job["video_path"])
+        words_path = jdir / "words.json"
+        if words_path.exists():
+            words = json.loads(words_path.read_text(encoding="utf-8")).get("words", [])
+        else:
+            clip_wav = jdir / f"raw_{clip_id}.wav"
+            extract_audio_wav(video_path, clip_wav)
+            _, words = transcribe_russian(clip_wav, total_duration=float(job["video_meta"].get("duration") or end_sec), model_size=whisper_model)
+        clip_words = [w for w in words if w["end"] > start_sec and w["start"] < end_sec]
+        transcript_txt = " ".join(w["word"] for w in clip_words).strip()
+        title = custom_title.strip() or _make_clip_title(transcript_txt, clip_num)
+        r_kwargs = _extract_render_kwargs(options, title)
+        render_clip(
+            source_video=video_path,
+            output_mp4=out_mp4,
+            thumb_jpg=out_thumb,
+            clip_start=start_sec,
+            clip_end=end_sec,
+            words=words,
+            **r_kwargs,
+        )
+        new_clip = {
+            "id": clip_id,
+            "index": clip_num,
+            "start": round(start_sec, 2),
+            "end": round(end_sec, 2),
+            "duration": round(end_sec - start_sec, 2),
+            "title": title,
+            "hook_text": title,
+            "transcript": transcript_txt,
+            "viral_score": 95,
+            "tags": ["✂️ Ручной выбор"],
+            "tiktok_caption": generate_tiktok_caption(title, transcript_txt, ["✂️ Ручной выбор"], job.get("original_filename", "")),
+            "trim_start": round(start_sec, 2),
+            "trim_end": round(end_sec, 2),
+            "version": int(time.time()),
+            "file_size_mb": round(out_mp4.stat().st_size / (1024 * 1024), 2),
+        }
+
+    with _LOCK:
+        live_job = _JOBS[job_id]
+        live_job.setdefault("clips", []).insert(0, new_clip)
+        if live_job.get("status") == "uploaded":
+            live_job["status"] = "completed"
+        _save_job(live_job)
+
+    return new_clip

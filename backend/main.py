@@ -23,6 +23,7 @@ from backend.config import (
 )
 from backend.hardware import get_hardware_info
 from backend.pipeline import (
+    create_custom_clip,
     create_job,
     get_job,
     list_jobs,
@@ -67,6 +68,7 @@ class ProcessRequest(BaseModel):
     target_fps: int = Field(default=30)
     video_enhance: bool = Field(default=False)
     ollama_model: Optional[str] = Field(default=None)
+    gemini_api_key: Optional[str] = Field(default=None)
 
 
 class RerenderRequest(BaseModel):
@@ -362,6 +364,29 @@ def api_download_all_clips(job_id: str) -> FileResponse:
         media_type="application/zip",
         filename=f"tikcut_{job_id}_all_clips.zip",
     )
+
+
+class CustomClipRequest(RerenderRequest):
+    start_sec: float = Field(..., ge=0.0)
+    end_sec: float = Field(..., gt=0.0)
+    whisper_model: str = Field(default="small")
+    custom_title: str = Field(default="")
+
+
+@app.post("/api/jobs/{job_id}/custom-clip")
+def api_custom_clip(job_id: str, req: CustomClipRequest) -> Dict[str, Any]:
+    try:
+        return create_custom_clip(
+            job_id=job_id,
+            start_sec=req.start_sec,
+            end_sec=req.end_sec,
+            options=req.model_dump(),
+            custom_title=req.custom_title,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка нарезки момента: {exc}")
 
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/rerender")
