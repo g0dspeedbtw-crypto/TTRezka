@@ -68,6 +68,10 @@ class ProcessRequest(BaseModel):
     webcam_image_id: Optional[str] = Field(default=None)
     show_hook_banner: bool = Field(default=True)
     hook_position: str = Field(default="between")
+    hook_text_color: str = Field(default="#0C0E18")
+    hook_bg_color: Optional[str] = Field(default="#FFFFFF")
+    hook_border_color: str = Field(default="#FFE600")
+    hook_font_size: str = Field(default="medium")
     watermark_text: Optional[str] = Field(default=None)
     watermark_opacity: float = Field(default=0.55, ge=0.15, le=1.0)
     jump_cuts: bool = Field(default=False)
@@ -97,6 +101,10 @@ class RerenderRequest(BaseModel):
     webcam_image_id: Optional[str] = Field(default=None)
     show_hook_banner: bool = Field(default=True)
     hook_position: str = Field(default="between")
+    hook_text_color: str = Field(default="#0C0E18")
+    hook_bg_color: Optional[str] = Field(default="#FFFFFF")
+    hook_border_color: str = Field(default="#FFE600")
+    hook_font_size: str = Field(default="medium")
     watermark_text: Optional[str] = Field(default=None)
     watermark_opacity: float = Field(default=0.55, ge=0.15, le=1.0)
     jump_cuts: bool = Field(default=False)
@@ -108,6 +116,9 @@ class RerenderRequest(BaseModel):
     edited_hook_text: Optional[str] = Field(default=None)
     trim_start: Optional[float] = Field(default=None)
     trim_end: Optional[float] = Field(default=None)
+    source_start: Optional[float] = Field(default=None)
+    source_end: Optional[float] = Field(default=None)
+    whisper_model: str = Field(default="small")
 
 
 class ProbeUrlRequest(BaseModel):
@@ -487,6 +498,8 @@ def api_rerender_clip(job_id: str, clip_id: str, req: RerenderRequest) -> Dict[s
             edited_hook_text=req.edited_hook_text,
             trim_start=req.trim_start,
             trim_end=req.trim_end,
+            source_start=req.source_start,
+            source_end=req.source_end,
         )
         return updated
     except ValueError as exc:

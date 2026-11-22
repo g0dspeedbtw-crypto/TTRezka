@@ -198,6 +198,10 @@ def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str
         "webcam_image_path": _resolve_avatar_path(options.get("webcam_image_id")) if use_photo else None,
         "hook_text": hook_title if show_hook else None,
         "hook_position": options.get("hook_position", "between"),
+        "hook_text_color": options.get("hook_text_color", "#0C0E18"),
+        "hook_bg_color": options.get("hook_bg_color", "#FFFFFF"),
+        "hook_border_color": options.get("hook_border_color", "#FFE600"),
+        "hook_font_size": options.get("hook_font_size", "medium"),
         "watermark_text": (options.get("watermark_text") or "").strip() or None,
         "watermark_opacity": float(options.get("watermark_opacity", 0.55)),
         "jump_cuts": bool(options.get("jump_cuts", False)),
@@ -697,8 +701,10 @@ def rerender_single_clip(
     edited_hook_text: Optional[str] = None,
     trim_start: Optional[float] = None,
     trim_end: Optional[float] = None,
+    source_start: Optional[float] = None,
+    source_end: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Re-render a single clip with updated style/crop/trim/edited subtitles without re-transcribing."""
+    """Re-render a single clip with updated style/crop/timecode shift/edited subtitles."""
     job = get_job(job_id)
     if not job:
         raise ValueError("Проект не найден")
@@ -711,32 +717,88 @@ def rerender_single_clip(
     out_mp4 = jdir / f"{clip_id}.mp4"
     out_thumb = jdir / f"{clip_id}.jpg"
     is_url = job.get("source_type") == "url"
+    total_dur = float(job.get("video_meta", {}).get("duration") or 0)
+
+    new_abs_start = float(target_clip.get("start", 0.0))
+    new_abs_end = float(target_clip.get("end", new_abs_start + target_clip.get("duration", 20.0)))
+    re_downloaded = False
+    new_transcript_from_whisper: Optional[str] = None
 
     if is_url:
-        source_video = Path(target_clip.get("raw_segment_path") or (jdir / f"raw_{clip_id}.mp4"))
-        clip_words_path = jdir / f"{clip_id}_words.json"
-        if not source_video.exists() or not clip_words_path.exists():
-            raise ValueError("Исходный фрагмент клипа не найден")
-        words = json.loads(clip_words_path.read_text(encoding="utf-8")).get("words", [])
-        max_len = float(target_clip.get("raw_segment_duration") or target_clip["duration"])
-        c_start = max(0.0, float(trim_start if trim_start is not None else target_clip.get("trim_start", 0.0)))
-        c_end = min(max_len, float(trim_end if trim_end is not None else target_clip.get("trim_end", max_len)))
+        old_abs_start = float(target_clip.get("start", 0.0))
+        old_abs_end = float(target_clip.get("end", old_abs_start + target_clip.get("duration", 20.0)))
+
+        # Check if user shifted the absolute stream timecode (e.g. -10s earlier or +10s later)
+        if source_start is not None or source_end is not None:
+            req_s = max(0.0, float(source_start if source_start is not None else old_abs_start))
+            req_e = float(source_end if source_end is not None else old_abs_end)
+            if total_dur > 0:
+                req_e = min(total_dur, req_e)
+            if req_e - req_s < 2.0:
+                req_e = req_s + 2.0
+            new_abs_start, new_abs_end = req_s, req_e
+
+            if abs(req_s - old_abs_start) > 0.25 or abs(req_e - old_abs_end) > 0.25:
+                # Download the newly shifted segment directly from YouTube / Twitch!
+                raw_seg_path = download_clip_segment(
+                    url=job["remote_url"],
+                    start=req_s,
+                    end=req_e,
+                    output_mp4=jdir / f"raw_{clip_id}.mp4",
+                )
+                seg_meta = probe_video(raw_seg_path)
+                seg_dur = float(seg_meta.get("duration") or (req_e - req_s))
+                clip_wav = jdir / f"raw_{clip_id}.wav"
+                extract_audio_wav(raw_seg_path, clip_wav)
+                whisper_model = options.get("whisper_model", "small")
+                clip_segs, words = transcribe_russian(clip_wav, total_duration=seg_dur, model_size=whisper_model)
+                (jdir / f"{clip_id}_words.json").write_text(
+                    json.dumps({"segments": clip_segs, "words": words}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                # Remove stale custom_words override since timecode shifted to new audio
+                stale_custom = jdir / f"{clip_id}_custom_words.json"
+                if stale_custom.exists():
+                    stale_custom.unlink()
+                source_video = raw_seg_path
+                c_start, c_end = 0.0, seg_dur
+                new_transcript_from_whisper = " ".join(s["text"] for s in clip_segs).strip()
+                re_downloaded = True
+
+        if not re_downloaded:
+            source_video = Path(target_clip.get("raw_segment_path") or (jdir / f"raw_{clip_id}.mp4"))
+            clip_words_path = jdir / f"{clip_id}_words.json"
+            if not source_video.exists() or not clip_words_path.exists():
+                raise ValueError("Исходный фрагмент клипа не найден")
+            words = json.loads(clip_words_path.read_text(encoding="utf-8")).get("words", [])
+            max_len = float(target_clip.get("raw_segment_duration") or target_clip["duration"])
+            c_start = max(0.0, float(trim_start if trim_start is not None else target_clip.get("trim_start", 0.0)))
+            c_end = min(max_len, float(trim_end if trim_end is not None else target_clip.get("trim_end", max_len)))
     else:
         words_path = jdir / "words.json"
         if not words_path.exists():
             raise ValueError("Таймкоды субтитров не найдены")
         words = json.loads(words_path.read_text(encoding="utf-8")).get("words", [])
         source_video = Path(job["video_path"])
-        total_dur = float(job["video_meta"].get("duration") or target_clip["end"])
-        c_start = max(0.0, float(trim_start if trim_start is not None else target_clip.get("trim_start", target_clip["start"])))
-        c_end = min(total_dur, float(trim_end if trim_end is not None else target_clip.get("trim_end", target_clip["end"])))
+        max_dur = total_dur or float(target_clip["end"])
+        req_s = source_start if source_start is not None else (trim_start if trim_start is not None else target_clip.get("trim_start", target_clip["start"]))
+        req_e = source_end if source_end is not None else (trim_end if trim_end is not None else target_clip.get("trim_end", target_clip["end"]))
+        c_start = max(0.0, float(req_s))
+        c_end = min(max_dur, float(req_e))
+        new_abs_start, new_abs_end = c_start, c_end
+        if source_start is not None or source_end is not None:
+            w_slice = [w for w in words if w["end"] > c_start and w["start"] < c_end]
+            new_transcript_from_whisper = " ".join(w["word"] for w in w_slice).strip()
+            stale_custom = jdir / f"{clip_id}_custom_words.json"
+            if stale_custom.exists():
+                stale_custom.unlink()
 
     if c_end - c_start < 2.0:
         c_end = c_start + 2.0
 
-    # Apply user-edited subtitle text if provided
+    # Apply user-edited subtitle text if provided (unless timecode shifted to new speech)
     custom_words_path = jdir / f"{clip_id}_custom_words.json"
-    if edited_transcript is not None:
+    if edited_transcript is not None and not re_downloaded and source_start is None and source_end is None:
         words_to_use = _realign_edited_words(words, edited_transcript, c_start, c_end)
         custom_words_path.write_text(json.dumps(words_to_use, ensure_ascii=False), encoding="utf-8")
     elif custom_words_path.exists():
@@ -766,15 +828,22 @@ def rerender_single_clip(
         live_job = _JOBS[job_id]
         for c in live_job["clips"]:
             if c["id"] == clip_id:
-                if edited_transcript is not None:
+                if new_transcript_from_whisper is not None:
+                    c["transcript"] = new_transcript_from_whisper
+                elif edited_transcript is not None:
                     c["transcript"] = edited_transcript.strip()
                 if edited_hook_text is not None:
                     c["hook_text"] = edited_hook_text.strip()
                     if edited_hook_text.strip():
                         c["title"] = edited_hook_text.strip()
+                c["start"] = round(new_abs_start, 2)
+                c["end"] = round(new_abs_end, 2)
                 c["trim_start"] = round(c_start, 2)
                 c["trim_end"] = round(c_end, 2)
                 c["duration"] = round(c_end - c_start, 2)
+                if re_downloaded:
+                    c["raw_segment_path"] = str(source_video)
+                    c["raw_segment_duration"] = round(c_end, 2)
                 c["tiktok_caption"] = generate_tiktok_caption(
                     c.get("title", ""), c.get("transcript", ""), c.get("tags"), live_job.get("original_filename", "")
                 )

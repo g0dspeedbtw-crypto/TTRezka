@@ -55,6 +55,11 @@
   const uppercaseToggle = document.getElementById('uppercaseToggle');
   const hookBannerToggle = document.getElementById('hookBannerToggle');
   const hookPositionSelect = document.getElementById('hookPositionSelect');
+  const hookFontSize = document.getElementById('hookFontSize');
+  const hookTextColor = document.getElementById('hookTextColor');
+  const hookBgColor = document.getElementById('hookBgColor');
+  const hookBorderColor = document.getElementById('hookBorderColor');
+  const hookTransparentBg = document.getElementById('hookTransparentBg');
   const searchChatToggle = document.getElementById('searchChatToggle');
   const searchLaughterToggle = document.getElementById('searchLaughterToggle');
   const useAiDirectorToggle = document.getElementById('useAiDirectorToggle');
@@ -387,6 +392,27 @@
     previewHookBanner.classList.toggle('hidden', !showHook);
     const hPos = hookPositionSelect ? hookPositionSelect.value : 'between';
     previewHookBanner.classList.toggle('pos-between', hPos === 'between');
+    if (showHook) {
+      const hTxtCol = hookTextColor ? hookTextColor.value : '#0c0e18';
+      const hBgCol = hookBgColor ? hookBgColor.value : '#ffffff';
+      const hBrdCol = hookBorderColor ? hookBorderColor.value : '#ffe600';
+      const hTransp = !!(hookTransparentBg && hookTransparentBg.checked);
+      const hSz = hookFontSize ? hookFontSize.value : 'medium';
+      previewHookBanner.style.fontFamily = fnt ? fnt.css_family : 'sans-serif';
+      previewHookBanner.style.color = hTxtCol;
+      previewHookBanner.style.fontSize = hSz === 'small' ? '9.5px' : hSz === 'large' ? '13.5px' : '11px';
+      if (hTransp) {
+        previewHookBanner.style.background = 'transparent';
+        previewHookBanner.style.borderColor = 'transparent';
+        previewHookBanner.style.boxShadow = 'none';
+        previewHookBanner.style.textShadow = `-2px -2px 0 ${hBrdCol}, 2px -2px 0 ${hBrdCol}, -2px 2px 0 ${hBrdCol}, 2px 2px 0 ${hBrdCol}, 0 3px 8px rgba(0,0,0,0.9)`;
+      } else {
+        previewHookBanner.style.background = hBgCol;
+        previewHookBanner.style.borderColor = hBrdCol;
+        previewHookBanner.style.boxShadow = '0 6px 18px rgba(0,0,0,0.45)';
+        previewHookBanner.style.textShadow = 'none';
+      }
+    }
 
     const sizePx = fontSize.value === 'small' ? 16 : fontSize.value === 'large' ? 23 : 19;
     const isUpper = uppercaseToggle.checked;
@@ -654,6 +680,11 @@
   uppercaseToggle.addEventListener('change', updateLivePreview);
   hookBannerToggle.addEventListener('change', updateLivePreview);
   if (hookPositionSelect) hookPositionSelect.addEventListener('change', updateLivePreview);
+  if (hookFontSize) hookFontSize.addEventListener('change', updateLivePreview);
+  if (hookTextColor) hookTextColor.addEventListener('input', updateLivePreview);
+  if (hookBgColor) hookBgColor.addEventListener('input', updateLivePreview);
+  if (hookBorderColor) hookBorderColor.addEventListener('input', updateLivePreview);
+  if (hookTransparentBg) hookTransparentBg.addEventListener('change', updateLivePreview);
   watermarkInput.addEventListener('input', updateLivePreview);
 
   btnUploadMusic.addEventListener('click', () => musicFileInput.click());
@@ -753,6 +784,10 @@
       webcam_image_id: webcamPhotoSelect ? webcamPhotoSelect.value || null : null,
       show_hook_banner: hookBannerToggle.checked,
       hook_position: hookPositionSelect ? hookPositionSelect.value : 'between',
+      hook_text_color: hookTextColor ? hookTextColor.value : '#0c0e18',
+      hook_bg_color: hookTransparentBg && hookTransparentBg.checked ? 'transparent' : (hookBgColor ? hookBgColor.value : '#ffffff'),
+      hook_border_color: hookBorderColor ? hookBorderColor.value : '#ffe600',
+      hook_font_size: hookFontSize ? hookFontSize.value : 'medium',
       watermark_text: (watermarkInput.value || '').trim() || null,
       watermark_opacity: 0.55,
       jump_cuts: jumpCutsToggle.checked,
@@ -919,11 +954,23 @@
   function openClipEditor(job, clip, card) {
     editingContext = { job, clip, card };
     editHookInput.value = clip.hook_text || clip.title || '';
-    editTrimStart.value = clip.trim_start != null ? clip.trim_start : (job.source_type === 'url' ? 0 : clip.start);
-    editTrimEnd.value = clip.trim_end != null ? clip.trim_end : (job.source_type === 'url' ? clip.duration : clip.end);
+    editTrimStart.value = Math.round(clip.start || 0);
+    editTrimEnd.value = Math.round(clip.end || (clip.start || 0) + (clip.duration || 25));
     editTranscriptInput.value = clip.transcript || '';
     clipEditorModal.classList.remove('hidden');
   }
+
+  document.querySelectorAll('.btn-editor-shift').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const delta = parseFloat(btn.dataset.delta || '0');
+      const curS = parseFloat(editTrimStart.value || '0');
+      const curE = parseFloat(editTrimEnd.value || '20');
+      const dur = Math.max(2, curE - curS);
+      const nextS = Math.max(0, curS + delta);
+      editTrimStart.value = Math.round(nextS);
+      editTrimEnd.value = Math.round(nextS + dur);
+    });
+  });
 
   function closeClipEditor() {
     clipEditorModal.classList.add('hidden');
@@ -941,16 +988,23 @@
     btnSaveEditor.textContent = '⏳ Перерендер...';
     try {
       const opts = getCurrentOptions();
+      const newS = parseFloat(editTrimStart.value);
+      const newE = parseFloat(editTrimEnd.value);
+      const shifted = Math.abs(newS - (clip.start || 0)) > 0.4 || Math.abs(newE - (clip.end || 0)) > 0.4;
+      const bodyPayload = {
+        ...opts,
+        edited_hook_text: editHookInput.value,
+      };
+      if (shifted) {
+        bodyPayload.source_start = newS;
+        bodyPayload.source_end = newE;
+      } else {
+        bodyPayload.edited_transcript = editTranscriptInput.value;
+      }
       const res = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/rerender`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...opts,
-          edited_transcript: editTranscriptInput.value,
-          edited_hook_text: editHookInput.value,
-          trim_start: parseFloat(editTrimStart.value),
-          trim_end: parseFloat(editTrimEnd.value),
-        }),
+        body: JSON.stringify(bodyPayload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -965,8 +1019,9 @@
       vid.load();
       card.querySelector('.clip-title').textContent = updated.title || clip.id;
       card.querySelector('.clip-transcript').textContent = updated.transcript || 'Без речи';
+      card.querySelector('.dur-badge').textContent = `${formatDuration(updated.start)} – ${formatDuration(updated.end)} (${Math.round(updated.duration)}с)`;
       closeClipEditor();
-      showToast('Клип перерендерен с вашими правками!');
+      showToast(shifted ? 'Таймкод сдвинут и клип перерендерен!' : 'Клип перерендерен с вашими правками!');
     } catch (err) {
       showToast(err.message || 'Ошибка перерендера');
     } finally {
@@ -1012,6 +1067,10 @@
             ${(clip.tags || []).map((t) => `<span class="clip-tag">${escapeHtml(t)}</span>`).join('')}
           </div>
           <div class="clip-transcript">${escapeHtml(clip.transcript || 'Без речи')}</div>
+          <div class="clip-shift-row">
+            <button type="button" class="btn btn-ghost btn-sm btn-shift-clip" data-delta="-10">⏪ -10с раньше</button>
+            <button type="button" class="btn btn-ghost btn-sm btn-shift-clip" data-delta="10">⏩ +10с позже</button>
+          </div>
           <div class="clip-actions">
             <a class="btn btn-primary btn-sm" href="${dlUrl}" download>⬇ Скачать MP4</a>
             <button type="button" class="btn btn-secondary btn-sm btn-edit">✏️ Редактор</button>
@@ -1020,6 +1079,44 @@
           </div>
         </div>
       `;
+
+      card.querySelectorAll('.btn-shift-clip').forEach((sBtn) => {
+        sBtn.addEventListener('click', async () => {
+          const delta = parseFloat(sBtn.dataset.delta || '0');
+          const curS = clip.start || 0;
+          const curE = clip.end || curS + (clip.duration || 25);
+          const dur = Math.max(2, curE - curS);
+          const nextS = Math.max(0, curS + delta);
+          const nextE = nextS + dur;
+          const origTxt = sBtn.textContent;
+          card.querySelectorAll('.btn-shift-clip').forEach((b) => { b.disabled = true; });
+          sBtn.textContent = '⏳ Сдвиг...';
+          try {
+            const opts = getCurrentOptions();
+            const res = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/rerender`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...opts, source_start: nextS, source_end: nextE }),
+            });
+            if (!res.ok) throw new Error('Не удалось сдвинуть таймкод');
+            const updated = await res.json();
+            Object.assign(clip, updated);
+            const vid = card.querySelector('video');
+            const nv = updated.version || Date.now();
+            vid.poster = `/api/jobs/${job.job_id}/clips/${clip.id}/thumb?v=${nv}`;
+            vid.src = `/api/jobs/${job.job_id}/clips/${clip.id}/video?v=${nv}`;
+            vid.load();
+            card.querySelector('.dur-badge').textContent = `${formatDuration(updated.start)} – ${formatDuration(updated.end)} (${Math.round(updated.duration)}с)`;
+            card.querySelector('.clip-transcript').textContent = updated.transcript || 'Без речи';
+            showToast(`Таймкод сдвинут на ${delta > 0 ? '+' : ''}${delta} сек!`);
+          } catch (err) {
+            showToast(err.message || 'Ошибка сдвига');
+          } finally {
+            sBtn.textContent = origTxt;
+            card.querySelectorAll('.btn-shift-clip').forEach((b) => { b.disabled = false; });
+          }
+        });
+      });
 
       card.querySelector('.btn-edit').addEventListener('click', () => openClipEditor(job, clip, card));
 

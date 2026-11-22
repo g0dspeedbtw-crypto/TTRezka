@@ -309,16 +309,28 @@ def _render_subtitle_frame(
     return img
 
 
-def _render_hook_banner(text: str, font_path: str) -> Image.Image:
-    """Render a bold viral Hook Title Banner (1080x260) for the first 4 seconds."""
-    img = Image.new("RGBA", (VIDEO_W, 260), (0, 0, 0, 0))
+def _render_hook_banner(
+    text: str,
+    font_path: str,
+    text_color: str = "#0C0E18",
+    bg_color: Optional[str] = "#FFFFFF",
+    border_color: str = "#FFE600",
+    font_size_mode: str = "medium",
+) -> Image.Image:
+    """Render a customizable viral Hook Title Banner (1080x280) with live color/size/background options."""
+    img = Image.new("RGBA", (VIDEO_W, 280), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    clean = text.strip().upper()[:66]
-    font = ImageFont.truetype(font_path, 46)
-    max_w = VIDEO_W - 180
+    clean = text.strip().upper()[:72]
+    px_map = {"small": 38, "medium": 48, "large": 58}
+    px = px_map.get(font_size_mode, 48)
+    font = ImageFont.truetype(font_path, px)
+    max_w = VIDEO_W - 160
 
-    # Word wrap into max 2 lines
+    text_rgba = _hex_to_rgba(text_color, 255) or (12, 14, 24, 255)
+    border_rgba = _hex_to_rgba(border_color, 255) or (255, 230, 0, 255)
+    bg_rgba = _hex_to_rgba(bg_color, 245) if bg_color and bg_color.lower() != "transparent" else None
+
     words = clean.split()
     lines: List[str] = []
     cur = ""
@@ -335,35 +347,40 @@ def _render_hook_banner(text: str, font_path: str) -> Image.Image:
     if cur and len(lines) < 2:
         lines.append(cur)
 
-    line_h = 58
+    line_h = int(px * 1.24)
     total_h = len(lines) * line_h
     max_line_w = 0
     for ln in lines:
         bb = draw.textbbox((0, 0), ln, font=font)
         max_line_w = max(max_line_w, bb[2] - bb[0])
 
-    pad_x, pad_y = 40, 26
-    box_w = min(VIDEO_W - 90, max_line_w + pad_x * 2)
+    pad_x, pad_y = 40, 24
+    box_w = min(VIDEO_W - 84, max_line_w + pad_x * 2)
     box_h = total_h + pad_y * 2
     x0 = (VIDEO_W - box_w) // 2
-    y0 = (260 - box_h) // 2
+    y0 = (280 - box_h) // 2
 
-    # Soft shadow + crisp white pill card with vibrant accent border
-    draw.rounded_rectangle([x0, y0 + 10, x0 + box_w, y0 + box_h + 10], radius=28, fill=(0, 0, 0, 150))
-    draw.rounded_rectangle(
-        [x0, y0, x0 + box_w, y0 + box_h],
-        radius=28,
-        fill=(255, 255, 255, 245),
-        outline=(255, 230, 0, 255),
-        width=6,
-    )
+    if bg_rgba is not None:
+        draw.rounded_rectangle([x0, y0 + 10, x0 + box_w, y0 + box_h + 10], radius=28, fill=(0, 0, 0, 150))
+        draw.rounded_rectangle(
+            [x0, y0, x0 + box_w, y0 + box_h],
+            radius=28,
+            fill=bg_rgba,
+            outline=border_rgba,
+            width=6,
+        )
 
     ty = y0 + pad_y
     for ln in lines:
         bb = draw.textbbox((0, 0), ln, font=font)
         lw = bb[2] - bb[0]
         tx = (VIDEO_W - lw) // 2 - bb[0]
-        draw.text((tx, ty - bb[1]), ln, font=font, fill=(12, 14, 24, 255))
+        if bg_rgba is None:
+            # Transparent mode: crisp thick outline + shadow so text pops directly over video/seam!
+            draw.text((tx, ty - bb[1] + 6), ln, font=font, fill=(0, 0, 0, 200), stroke_width=8, stroke_fill=(0, 0, 0, 200))
+            draw.text((tx, ty - bb[1]), ln, font=font, fill=text_rgba, stroke_width=7, stroke_fill=border_rgba)
+        else:
+            draw.text((tx, ty - bb[1]), ln, font=font, fill=text_rgba)
         ty += line_h
 
     return img
@@ -574,6 +591,10 @@ def render_clip(
     webcam_image_path: Optional[Path] = None,
     hook_text: Optional[str] = None,
     hook_position: str = "between",
+    hook_text_color: str = "#0C0E18",
+    hook_bg_color: Optional[str] = "#FFFFFF",
+    hook_border_color: str = "#FFE600",
+    hook_font_size: str = "medium",
     watermark_text: Optional[str] = None,
     watermark_opacity: float = 0.55,
     jump_cuts: bool = False,
@@ -657,7 +678,14 @@ def render_clip(
         hook_idx: Optional[int] = None
         if hook_text and hook_text.strip():
             hook_png = tmp_dir / "hook.png"
-            _render_hook_banner(hook_text.strip(), font_path).save(hook_png)
+            _render_hook_banner(
+                hook_text.strip(),
+                font_path,
+                text_color=hook_text_color,
+                bg_color=hook_bg_color,
+                border_color=hook_border_color,
+                font_size_mode=hook_font_size,
+            ).save(hook_png)
             inputs.extend(["-i", str(hook_png)])
             hook_idx = next_idx
             next_idx += 1
