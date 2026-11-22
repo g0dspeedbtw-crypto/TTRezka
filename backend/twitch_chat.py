@@ -80,61 +80,69 @@ def _query_twitch_comments_at_offset(vod_id: str, offset_sec: int) -> List[Dict[
 def analyze_twitch_chat_peaks(
     url: str,
     total_duration: float,
-    max_samples: int = 18,
+    max_samples: int = 60,
 ) -> List[Dict[str, Any]]:
     """
-    Sample Twitch VOD Chat Replay across the stream and return a heatmap-compatible
-    activity curve highlighting moments where chat explodes with messages & hype emotes.
+    Concurrently sample Twitch VOD Chat Replay across the entire stream (up to 60 points in ~4s)
+    and return a normalized burst-activity curve highlighting real chat explosions.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     vod_id = extract_twitch_vod_id(url)
     if not vod_id or total_duration < 30:
         return []
 
-    step = max(30.0, total_duration / max_samples)
-    bins: List[Dict[str, Any]] = []
-    raw_scores: List[float] = []
+    step = max(25.0, (total_duration - 30.0) / max(1, max_samples))
+    offsets: List[int] = []
+    cur = 15.0
+    while cur < total_duration - 15.0 and len(offsets) < max_samples:
+        offsets.append(int(cur))
+        cur += step
 
-    offset = 15.0
-    sample_idx = 0
-    while offset < total_duration - 15.0 and sample_idx < max_samples:
+    def _sample_one(off: int) -> Optional[Dict[str, Any]]:
         try:
-            msgs = _query_twitch_comments_at_offset(vod_id, int(offset))
+            msgs = _query_twitch_comments_at_offset(vod_id, off)
         except Exception:
-            break
+            return None
+        if not msgs:
+            return None
+        t_min = msgs[0]["offset"]
+        t_max = max(t_min + 4.0, msgs[-1]["offset"])
+        span = max(4.0, t_max - t_min)
+        msg_per_sec = len(msgs) / span
 
-        if msgs:
-            t_min = msgs[0]["offset"]
-            t_max = max(t_min + 5.0, msgs[-1]["offset"])
-            span = max(5.0, t_max - t_min)
-            msg_per_sec = len(msgs) / span
+        hype_hits = 0
+        for m in msgs:
+            low = m["text"].lower()
+            if any(tok in low for tok in HYPE_TOKENS) or "!" in low or "))" in low:
+                hype_hits += 1
+        hype_ratio = hype_hits / max(1, len(msgs))
+        score = msg_per_sec * (1.0 + 1.8 * hype_ratio)
+        return {
+            "start_time": round(t_min, 2),
+            "end_time": round(min(total_duration, t_min + max(20.0, span)), 2),
+            "raw_score": score,
+            "msg_count": len(msgs),
+            "source": "twitch_chat",
+        }
 
-            hype_hits = 0
-            for m in msgs:
-                low = m["text"].lower()
-                if any(tok in low for tok in HYPE_TOKENS) or "!" in low or ")" * 2 in low:
-                    hype_hits += 1
-            hype_ratio = hype_hits / max(1, len(msgs))
-            score = msg_per_sec * (1.0 + 1.4 * hype_ratio)
-            bins.append(
-                {
-                    "start_time": round(t_min, 2),
-                    "end_time": round(min(total_duration, t_min + max(25.0, span)), 2),
-                    "raw_score": score,
-                    "msg_count": len(msgs),
-                    "source": "twitch_chat",
-                }
-            )
-            raw_scores.append(score)
-
-        offset += step
-        sample_idx += 1
+    bins: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for res in pool.map(_sample_one, offsets):
+            if res is not None:
+                bins.append(res)
 
     if not bins:
         return []
 
+    raw_scores = [b["raw_score"] for b in bins]
+    med = sorted(raw_scores)[len(raw_scores) // 2] or 0.01
     max_sc = max(raw_scores) or 1.0
     for b in bins:
-        b["value"] = round(min(1.0, b["raw_score"] / max_sc), 3)
+        # Emphasize sharp spikes ABOVE the stream's normal median chat speed!
+        rel_spike = b["raw_score"] / max(med, 0.05)
+        norm = 0.55 * (b["raw_score"] / max_sc) + 0.45 * min(1.0, max(0.0, (rel_spike - 1.0) / 3.0))
+        b["value"] = round(min(1.0, norm), 3)
 
     return bins
 

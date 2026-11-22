@@ -3,18 +3,64 @@ import json
 import math
 import random
 import re
+import subprocess
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import numpy as np
 import yt_dlp
 from yt_dlp.utils import download_range_func
 
 from backend.highlights import (
+    _find_audio_peak_times,
     _make_clip_title,
+    compute_audio_features,
     score_russian_text_fun_and_hooks,
 )
 from backend.twitch_chat import analyze_twitch_chat_peaks, extract_twitch_vod_id
+
+
+def download_lightweight_audio(url: str, wav_path: Path) -> Optional[Path]:
+    """
+    Download ONLY ultra-low-bitrate audio (NO video!) and convert to 8kHz mono WAV
+    for fast 100% local acoustic laughter & loud-reaction peak detection on YouTube/Twitch links.
+    """
+    if wav_path.exists() and wav_path.stat().st_size > 1000:
+        return wav_path
+
+    raw_base = wav_path.with_suffix(".raw_audio")
+    out_tpl = str(raw_base) + ".%(ext)s"
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "format": "worstaudio[abr>=24]/bestaudio[abr<=64]/worstaudio/bestaudio",
+        "outtmpl": out_tpl,
+        "concurrent_fragment_downloads": 6,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        files = list(wav_path.parent.glob(raw_base.name + ".*"))
+        if not files:
+            return None
+        src_audio = files[0]
+        cmd = [
+            "ffmpeg", "-y", "-i", str(src_audio),
+            "-vn", "-ac", "1", "-ar", "8000", "-acodec", "pcm_s16le",
+            str(wav_path),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            src_audio.unlink()
+        except Exception:
+            pass
+        if res.returncode == 0 and wav_path.exists() and wav_path.stat().st_size > 1000:
+            return wav_path
+    except Exception as exc:
+        print(f"[remote] lightweight audio download skipped: {exc}")
+    return None
 
 
 def probe_remote_url(url: str) -> Dict[str, Any]:
@@ -250,46 +296,99 @@ def find_remote_highlights(
     search_laughter: bool = True,
     shuffle_seed: int = 0,
     exclude_ranges: Optional[List[Tuple[float, float]]] = None,
+    audio_wav_path: Optional[Path] = None,
     progress_cb: Optional[Callable[[float, str], None]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Analyze a remote video or multi-hour stream WITHOUT downloading it!
-    Combines YouTube Most Replayed Heatmap / Twitch Chat Replay + Russian laughter/comedy hooks + pacing.
+    Analyze a remote video or multi-hour stream WITHOUT downloading the full video!
+    Combines REAL acoustic laughter/scream bursts (lightweight audio) + Twitch Chat / YouTube Heatmap
+    (with chat-reaction lag offset!) + Russian comedy transcript hooks.
     """
     total_duration = float(remote_meta.get("duration") or 0)
     heatmap = (remote_meta.get("heatmap") or []) if search_chat_activity else []
     has_heatmap = len(heatmap) > 0
 
+    # Real local acoustic laughter & loud reaction detection from lightweight audio!
+    rms = None
+    burst = None
+    bin_sec = 0.25
+    audio_peaks: List[float] = []
+    if search_laughter and audio_wav_path and Path(audio_wav_path).exists():
+        if progress_cb:
+            progress_cb(0.2, "😂 Локальный анализ смеха, криков и громких реакций стримера...")
+        try:
+            rms, burst, bin_sec = compute_audio_features(Path(audio_wav_path), bin_sec=0.25)
+            audio_peaks = _find_audio_peak_times(rms, burst, bin_sec, top_k=max(24, clip_count * 4))
+        except Exception:
+            rms, burst, audio_peaks = None, None, []
+
     if progress_cb:
-        progress_cb(0.25, "ИИ-анализ транскрипта и тепловой карты пересмотров...")
+        progress_cb(0.45, "Анализ пиков чата, смеха и смешных моментов...")
+
+    def _audio_burst_score(s_t: float, e_t: float) -> float:
+        if rms is None or burst is None or len(rms) < 8:
+            return 0.0
+        b0 = max(0, int(s_t / bin_sec))
+        b1 = min(len(rms), max(b0 + 1, int(math.ceil(e_t / bin_sec))))
+        seg_r = rms[b0:b1]
+        seg_b = burst[b0:b1]
+        if len(seg_r) < 4:
+            return 0.0
+        p92_r = float(np.percentile(seg_r, 92)) / (float(np.median(rms)) + 1e-6)
+        p92_b = float(np.percentile(seg_b, 92)) / (float(np.median(burst)) + 1e-6)
+        return min(1.0, max(0.0, 0.20 + 0.22 * (p92_r - 1.0) + 0.26 * (p92_b - 1.0)))
 
     candidates: List[Dict[str, Any]] = []
+    seen_ranges = set()
+
+    def _add_remote_cand(s_t: float, e_t: float, txt: str, w_list: List[Dict[str, Any]], after_pause: bool) -> None:
+        key = (round(s_t, 1), round(e_t, 1))
+        if key in seen_ranges:
+            return
+        seen_ranges.add(key)
+        a_sc = _audio_burst_score(s_t, e_t)
+        sc = _score_remote_window(
+            s_t, e_t, total_duration, txt, w_list, heatmap, after_pause,
+            search_chat_activity=search_chat_activity,
+            search_laughter=search_laughter,
+            audio_laughter_score=a_sc,
+        )
+        candidates.append(
+            {
+                "start": round(s_t, 2),
+                "end": round(e_t, 2),
+                "duration": round(e_t - s_t, 2),
+                "text": txt,
+                "score_data": sc,
+            }
+        )
 
     if segments:
         n_seg = len(segments)
-        seen_ranges = set()
 
-        def _add_remote_cand(s_t: float, e_t: float, txt: str, w_list: List[Dict[str, Any]], after_pause: bool) -> None:
-            key = (round(s_t, 1), round(e_t, 1))
-            if key in seen_ranges:
-                return
-            seen_ranges.add(key)
-            sc = _score_remote_window(
-                s_t, e_t, total_duration, txt, w_list, heatmap, after_pause,
-                search_chat_activity=search_chat_activity,
-                search_laughter=search_laughter,
-            )
-            candidates.append(
-                {
-                    "start": round(s_t, 2),
-                    "end": round(e_t, 2),
-                    "duration": round(e_t - s_t, 2),
-                    "text": txt,
-                    "score_data": sc,
-                }
-            )
+        def _snap_and_add(desired_start: float, desired_end: float) -> None:
+            i_start = min(range(n_seg), key=lambda k: abs(segments[k]["start"] - desired_start))
+            i_end = min(range(n_seg), key=lambda k: abs(segments[k]["end"] - desired_end))
+            if i_end < i_start:
+                i_end = i_start
+            while i_end + 1 < n_seg and (segments[i_end]["end"] - segments[i_start]["start"]) < min_duration:
+                i_end += 1
+            while i_start > 0 and (segments[i_end]["end"] - segments[i_start]["start"]) < min_duration:
+                i_start -= 1
+            s_t = max(0.0, segments[i_start]["start"] - 0.15)
+            e_t = min(total_duration or (segments[i_end]["end"] + 1.0), segments[i_end]["end"] + 0.25)
+            if min_duration * 0.75 <= (e_t - s_t) <= max_duration + 6.0:
+                seg_slice = segments[i_start : i_end + 1]
+                txt = " ".join(s["text"] for s in seg_slice).strip()
+                w_slice = [w for s in seg_slice for w in s.get("words", [])]
+                _add_remote_cand(s_t, e_t, txt, w_slice, True)
 
-        # 1. Peak-Anchored Windows around top YouTube Heatmap / Twitch Chat peaks (Setup -> Peak -> Reaction!)
+        # 1. Anchor around REAL Acoustic Laughter / Scream peaks! (Setup ~15s before laugh + ~12s after)
+        for pt in audio_peaks:
+            _snap_and_add(max(0.0, pt - min(18.0, min_duration * 0.65)), min(total_duration or (pt + 15.0), pt + min(14.0, max_duration * 0.35)))
+
+        # 2. Anchor around Chat / Heatmap peaks with CHAT REACTION LAG OFFSET!
+        # (Chat explodes 4-6s AFTER the joke, so start 18-22s BEFORE the chat peak!)
         if has_heatmap:
             sorted_peaks = sorted(heatmap, key=lambda h: float(h.get("value", 0.0)), reverse=True)
             chosen_peak_centers: List[float] = []
@@ -297,28 +396,12 @@ def find_remote_highlights(
                 center = (float(h["start_time"]) + float(h["end_time"])) * 0.5
                 if all(abs(center - c) >= 18.0 for c in chosen_peak_centers):
                     chosen_peak_centers.append(center)
-                    if len(chosen_peak_centers) >= max(16, clip_count * 4):
+                    if len(chosen_peak_centers) >= max(20, clip_count * 4):
                         break
             for center in chosen_peak_centers:
-                desired_start = max(0.0, center - min(18.0, min_duration * 0.65))
-                desired_end = min(total_duration or (center + 20.0), center + min(18.0, max_duration * 0.42))
-                i_start = min(range(n_seg), key=lambda k: abs(segments[k]["start"] - desired_start))
-                i_end = min(range(n_seg), key=lambda k: abs(segments[k]["end"] - desired_end))
-                if i_end < i_start:
-                    i_end = i_start
-                while i_end + 1 < n_seg and (segments[i_end]["end"] - segments[i_start]["start"]) < min_duration:
-                    i_end += 1
-                while i_start > 0 and (segments[i_end]["end"] - segments[i_start]["start"]) < min_duration:
-                    i_start -= 1
-                s_t = max(0.0, segments[i_start]["start"] - 0.15)
-                e_t = min(total_duration or (segments[i_end]["end"] + 1.0), segments[i_end]["end"] + 0.25)
-                if min_duration * 0.8 <= (e_t - s_t) <= max_duration + 6.0:
-                    seg_slice = segments[i_start : i_end + 1]
-                    txt = " ".join(s["text"] for s in seg_slice).strip()
-                    w_slice = [w for s in seg_slice for w in s.get("words", [])]
-                    _add_remote_cand(s_t, e_t, txt, w_slice, True)
+                _snap_and_add(max(0.0, center - min(22.0, min_duration * 0.75)), min(total_duration or (center + 14.0), center + min(12.0, max_duration * 0.30)))
 
-        # 2. Sliding transcript windows across the stream (catches funny dialogue & hooks)
+        # 3. Sliding transcript windows across the stream
         stride = 1 if n_seg <= 450 else max(1, n_seg // 400)
         for i in range(0, n_seg, stride):
             start_t = max(0.0, segments[i]["start"] - 0.15)
@@ -341,59 +424,31 @@ def find_remote_highlights(
                 if n_seg > 450 and dur >= (min_duration + max_duration) * 0.45:
                     break
 
-    # If no captions exist (e.g. Twitch VOD or music stream), use heatmap peaks or evenly spaced windows
+    # No captions (e.g. Twitch VOD): build directly from REAL acoustic laughter peaks + Twitch Chat peaks!
     if not candidates:
-        target_dur = min(max_duration, max(min_duration, 35.0))
+        target_dur = min(max_duration, max(min_duration, 32.0))
+        for pt in audio_peaks:
+            s = max(0.0, pt - target_dur * 0.58)
+            e = min(total_duration, s + target_dur)
+            if e - s >= min_duration * 0.7:
+                _add_remote_cand(s, e, "", [], True)
         if has_heatmap:
-            # Rank heatmap buckets directly
             sorted_hm = sorted(heatmap, key=lambda h: float(h.get("value", 0)), reverse=True)
-            for h in sorted_hm[: clip_count * 6]:
+            for h in sorted_hm[: max(24, clip_count * 5)]:
                 center = (float(h["start_time"]) + float(h["end_time"])) / 2.0
-                s = max(0.0, center - target_dur * 0.4)
+                # Shift BEFORE chat peak because chat lags behind the joke by ~4-6s!
+                s = max(0.0, center - target_dur * 0.68)
                 e = min(total_duration, s + target_dur)
-                if e - s < min_duration * 0.7:
-                    continue
-                val = float(h.get("value", 0.5))
-                is_tw = h.get("source") == "twitch_chat"
-                sc = {
-                    "viral_score": int(round(min(99, 55 + val * 44))),
-                    "raw_total": val,
-                    "tags": (
-                        ["💬 Взрыв чата Twitch", "🔥 Топ момент стрима"]
-                        if is_tw
-                        else ["📈 Пик пересмотров", "🔥 Топ момент стрима"]
-                    ),
-                }
-                candidates.append(
-                    {
-                        "start": round(s, 2),
-                        "end": round(e, 2),
-                        "duration": round(e - s, 2),
-                        "text": "",
-                        "score_data": sc,
-                    }
-                )
-        else:
-            # Evenly distribute candidate windows across the stream
+                if e - s >= min_duration * 0.7:
+                    _add_remote_cand(s, e, "", [], True)
+        if not candidates:
             usable = max(target_dur, total_duration - 20.0)
             step = max(target_dur, usable / max(1, clip_count + 1))
             t = min(10.0, total_duration * 0.05)
             idx_c = 0
             while t + min_duration <= total_duration and idx_c < clip_count * 3:
                 e = min(total_duration, t + target_dur)
-                candidates.append(
-                    {
-                        "start": round(t, 2),
-                        "end": round(e, 2),
-                        "duration": round(e - t, 2),
-                        "text": "",
-                        "score_data": {
-                            "viral_score": max(65, 86 - idx_c * 3),
-                            "raw_total": 0.7 - idx_c * 0.03,
-                            "tags": ["🎬 Фрагмент стрима"],
-                        },
-                    }
-                )
+                _add_remote_cand(t, e, "", [], True)
                 t += step
                 idx_c += 1
 
@@ -464,14 +519,24 @@ def _score_remote_window(
     starts_after_pause: bool,
     search_chat_activity: bool = True,
     search_laughter: bool = True,
+    audio_laughter_score: float = 0.0,
 ) -> Dict[str, Any]:
     duration = max(1.0, end - start)
     hm_score = _heatmap_score_in_window(heatmap, start, end) if search_chat_activity else 0.0
 
-    # Speech pacing
-    wps = len(window_words) / duration
-    if wps < 0.4:
-        speech_score = 0.15
+    # Speech pacing + hard penalty for wordless/music-only segments when transcript exists!
+    word_count = len(window_words) if window_words else len(text.split())
+    wps = word_count / duration
+    wordless_penalty = 0.0
+    if word_count == 0 and not text.strip():
+        speech_score = 0.10
+        wordless_penalty = 0.45
+    elif word_count < 6 or wps < 0.35:
+        speech_score = 0.05
+        wordless_penalty = 0.50
+    elif word_count < 12 or wps < 0.65:
+        speech_score = 0.20
+        wordless_penalty = 0.22
     elif wps <= 4.0:
         speech_score = min(1.0, 0.25 + (wps / 3.3) * 0.75)
     else:
@@ -485,36 +550,42 @@ def _score_remote_window(
         if start < 12.0 or end > (total_duration - 12.0):
             edge_penalty = 0.14
 
-    if heatmap and search_chat_activity:
+    has_audio_sig = audio_laughter_score > 0.01
+    if has_audio_sig and heatmap and search_chat_activity and search_laughter:
+        raw_total = 0.36 * audio_laughter_score + 0.34 * hm_score + 0.18 * comedy_score + 0.07 * hook_score + 0.05 * speech_score - ad_penalty - edge_penalty
+    elif has_audio_sig and search_laughter:
+        raw_total = 0.52 * audio_laughter_score + 0.26 * comedy_score + 0.12 * hook_score + 0.10 * speech_score - ad_penalty - edge_penalty
+    elif heatmap and search_chat_activity:
         if search_laughter:
-            raw_total = 0.42 * hm_score + 0.38 * comedy_score + 0.12 * hook_score + 0.08 * speech_score - ad_penalty - edge_penalty
+            raw_total = 0.46 * hm_score + 0.34 * comedy_score + 0.12 * hook_score + 0.08 * speech_score - ad_penalty - edge_penalty
         else:
-            raw_total = 0.56 * hm_score + 0.12 * comedy_score + 0.20 * hook_score + 0.12 * speech_score - ad_penalty - edge_penalty
+            raw_total = 0.60 * hm_score + 0.12 * comedy_score + 0.18 * hook_score + 0.10 * speech_score - ad_penalty - edge_penalty
     else:
         if search_laughter:
             raw_total = 0.60 * comedy_score + 0.22 * hook_score + 0.18 * speech_score - ad_penalty - edge_penalty
         else:
             raw_total = 0.22 * comedy_score + 0.48 * hook_score + 0.30 * speech_score - ad_penalty - edge_penalty
 
-    raw_total = max(0.05, min(1.0, raw_total))
+    raw_total = max(0.02, min(1.0, raw_total - wordless_penalty))
     viral_score = int(round(min(99, max(48, 44 + raw_total * 56))))
 
     tags: List[str] = []
-    if heatmap and hm_score >= 0.52:
+    if has_audio_sig and audio_laughter_score >= 0.56:
+        tags.append("😂 Смех / Крик стримера")
+    if heatmap and hm_score >= 0.50:
         is_tw = any(h.get("source") == "twitch_chat" for h in heatmap[:3])
         tags.append("💬 Взрыв чата Twitch" if is_tw else "📈 Пик пересмотров")
-    if comedy_score >= 0.40:
-        tags.append("😂 Смешной / Реакция")
+    if comedy_score >= 0.40 and len(tags) < 3:
+        tags.append("🤣 Смешная реакция")
     if hook_score >= 0.52 and len(tags) < 3:
         tags.append("💬 Сильный хук")
-    if speech_score >= 0.74 and len(tags) < 3:
-        tags.append("🎤 Живая подача")
     if not tags:
         tags.append("✨ Топ момент")
 
     return {
         "viral_score": viral_score,
         "raw_total": raw_total,
+        "audio_laughter_score": round(audio_laughter_score, 3),
         "heatmap_score": round(hm_score, 3),
         "comedy_score": round(comedy_score, 3),
         "hook_score": round(hook_score, 3),

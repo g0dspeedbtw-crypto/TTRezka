@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.ai_director import find_funny_moments_gemini, find_funny_moments_ollama
-from backend.config import AVATARS_DIR, JOBS_DIR, MUSIC_DIR, load_settings
+from backend.config import ADS_DIR, AVATARS_DIR, JOBS_DIR, MUSIC_DIR, load_settings
 from backend.hardware import get_hardware_info
 from backend.highlights import (
     _find_audio_peak_times,
@@ -19,6 +19,7 @@ from backend.highlights import (
 from backend.ollama_ranker import enhance_highlights_with_ollama
 from backend.remote import (
     download_clip_segment,
+    download_lightweight_audio,
     fetch_remote_transcript,
     find_remote_highlights,
 )
@@ -58,6 +59,13 @@ def _resolve_avatar_path(avatar_id: Optional[str]) -> Optional[Path]:
     if not avatar_id:
         return None
     p = AVATARS_DIR / Path(avatar_id).name
+    return p if p.exists() else None
+
+
+def _resolve_ad_path(ad_file_id: Optional[str]) -> Optional[Path]:
+    if not ad_file_id:
+        return None
+    p = ADS_DIR / Path(ad_file_id).name
     return p if p.exists() else None
 
 
@@ -209,6 +217,9 @@ def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str
         "bg_music_volume": float(options.get("bg_music_volume", 0.18)),
         "target_fps": int(options.get("target_fps", 30)),
         "video_enhance": bool(options.get("video_enhance", False)),
+        "ad_mode": options.get("ad_mode", "bottom_overlay") if options.get("enable_ad_banner") else None,
+        "ad_banner_path": _resolve_ad_path(options.get("ad_banner_id")) if options.get("enable_ad_banner") else None,
+        "ad_audio_path": _resolve_ad_path(options.get("ad_audio_id")) if options.get("enable_ad_banner") else None,
     }
 
 
@@ -304,7 +315,18 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             except Exception as exc:
                 print(f"[ai_director] Ollama failed ({exc}), falling back to local detector")
 
-        # Fallback (or Shuffle mode): Local Heatmap / Twitch Chat / Russian Laughter Detector
+        # Download ONLY lightweight audio (no video!) when search_laughter is ON so we detect REAL laughter/screams!
+        light_wav: Optional[Path] = None
+        if search_laugh:
+            _update_job(
+                job_id,
+                stage="analyzing",
+                progress=24,
+                message="😂 Загрузка лёгкой аудиодорожки для локального поиска смеха и криков стримера...",
+            )
+            light_wav = download_lightweight_audio(remote_url, jdir / "light_audio.wav")
+
+        # Fallback (or Shuffle mode): Local Acoustic Laughter + Twitch Chat / YouTube Heatmap Detector
         if not highlights:
             highlights = find_remote_highlights(
                 remote_meta=remote_meta,
@@ -317,6 +339,7 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 search_laughter=search_laugh,
                 shuffle_seed=shuffle_seed,
                 exclude_ranges=exclude_ranges,
+                audio_wav_path=light_wav,
                 progress_cb=on_hl,
             )
 

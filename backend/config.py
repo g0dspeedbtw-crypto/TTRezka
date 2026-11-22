@@ -14,11 +14,12 @@ UPLOADS_DIR = DATA_DIR / "uploads"
 JOBS_DIR = DATA_DIR / "jobs"
 MUSIC_DIR = DATA_DIR / "music"
 AVATARS_DIR = DATA_DIR / "avatars"
+ADS_DIR = DATA_DIR / "ads"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 FONTS_DIR = BASE_DIR / "backend" / "fonts"
 STATIC_DIR = BASE_DIR / "static"
 
-for _d in (DATA_DIR, UPLOADS_DIR, JOBS_DIR, MUSIC_DIR, AVATARS_DIR, FONTS_DIR, STATIC_DIR):
+for _d in (DATA_DIR, UPLOADS_DIR, JOBS_DIR, MUSIC_DIR, AVATARS_DIR, ADS_DIR, FONTS_DIR, STATIC_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend.config import (
+    ADS_DIR,
     AVATARS_DIR,
     BASE_DIR,
     FONTS_DIR,
@@ -79,6 +80,10 @@ class ProcessRequest(BaseModel):
     bg_music_volume: float = Field(default=0.18, ge=0.05, le=0.5)
     target_fps: int = Field(default=30)
     video_enhance: bool = Field(default=False)
+    enable_ad_banner: bool = Field(default=False)
+    ad_mode: str = Field(default="bottom_overlay")
+    ad_banner_id: Optional[str] = Field(default=None)
+    ad_audio_id: Optional[str] = Field(default=None)
     search_chat_activity: bool = Field(default=True)
     search_laughter: bool = Field(default=True)
     use_ai_director: bool = Field(default=True)
@@ -112,6 +117,10 @@ class RerenderRequest(BaseModel):
     bg_music_volume: float = Field(default=0.18, ge=0.05, le=0.5)
     target_fps: int = Field(default=30)
     video_enhance: bool = Field(default=False)
+    enable_ad_banner: bool = Field(default=False)
+    ad_mode: str = Field(default="bottom_overlay")
+    ad_banner_id: Optional[str] = Field(default=None)
+    ad_audio_id: Optional[str] = Field(default=None)
     edited_transcript: Optional[str] = Field(default=None)
     edited_hook_text: Optional[str] = Field(default=None)
     trim_start: Optional[float] = Field(default=None)
@@ -431,6 +440,76 @@ def api_get_avatar(avatar_id: str) -> FileResponse:
     p = AVATARS_DIR / safe_name
     if not p.exists():
         raise HTTPException(status_code=404, detail="Фото не найдено")
+    return FileResponse(path=str(p))
+
+
+@app.get("/api/ads")
+def api_list_ads() -> Dict[str, Any]:
+    banners: List[Dict[str, Any]] = []
+    audios: List[Dict[str, Any]] = []
+    for p in sorted(ADS_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+        ext = p.suffix.lower()
+        if ext in {".png", ".jpg", ".jpeg", ".webp"}:
+            banners.append({"id": p.name, "name": p.stem, "url": f"/api/ads/{p.name}"})
+        elif ext in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
+            dur = 0.0
+            try:
+                dur = float(probe_video(p).get("duration") or 0.0)
+            except Exception:
+                pass
+            audios.append({"id": p.name, "name": p.stem, "duration": round(dur, 1)})
+    return {"banners": banners, "audios": audios}
+
+
+@app.post("/api/ads/banner")
+async def api_upload_ad_banner(file: UploadFile = File(...)) -> Dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Баннер не выбран")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=400, detail="Поддерживаются форматы баннера: PNG, JPG, WEBP")
+    safe_stem = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ _-]+", "", Path(file.filename).stem).strip()[:40] or "banner"
+    fname = f"banner_{safe_stem}_{uuid.uuid4().hex[:6]}{ext}"
+    dest = ADS_DIR / fname
+    with dest.open("wb") as out:
+        while True:
+            chunk = await file.read(512 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    return {"id": fname, "name": safe_stem, "url": f"/api/ads/{fname}"}
+
+
+@app.post("/api/ads/audio")
+async def api_upload_ad_audio(file: UploadFile = File(...)) -> Dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Озвучка не выбрана")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
+        raise HTTPException(status_code=400, detail="Поддерживаются форматы озвучки: MP3, WAV, M4A, OGG")
+    safe_stem = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ _-]+", "", Path(file.filename).stem).strip()[:40] or "voiceover"
+    fname = f"voice_{safe_stem}_{uuid.uuid4().hex[:6]}{ext}"
+    dest = ADS_DIR / fname
+    with dest.open("wb") as out:
+        while True:
+            chunk = await file.read(512 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    dur = 0.0
+    try:
+        dur = float(probe_video(dest).get("duration") or 0.0)
+    except Exception:
+        pass
+    return {"id": fname, "name": safe_stem, "duration": round(dur, 1)}
+
+
+@app.get("/api/ads/{filename}")
+def api_get_ad_file(filename: str) -> FileResponse:
+    safe_name = Path(filename).name
+    p = ADS_DIR / safe_name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Файл рекламы не найден")
     return FileResponse(path=str(p))
 
 

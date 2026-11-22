@@ -566,6 +566,43 @@ input[type="range"] {
 .preview-hook-banner.pos-between {
   top: 34%;
 }
+.preview-ad-banner {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 12px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.preview-ad-banner img {
+  max-width: 100%;
+  max-height: 46px;
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.65);
+}
+.preview-ad-banner.mode-midroll {
+  inset: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 20px;
+}
+.preview-ad-banner.mode-midroll img {
+  max-height: 150px;
+}
+.preview-ad-badge {
+  margin-top: 8px;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 230, 0, 0.92);
+  color: #0b0d16;
+}
 .color-controls-row {
   display: flex;
   flex-wrap: wrap;

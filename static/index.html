@@ -276,6 +276,43 @@
               <span class="switch-label">🎨 Сочность и резкость</span>
               <span class="switch"><input id="videoEnhanceToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
+            <label class="switch-item">
+              <span class="switch-label">📢 Рекламный баннер</span>
+              <span class="switch"><input id="adBannerToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+          </div>
+
+          <div id="adBannerBox" class="sub-box hidden" style="margin-bottom: 12px;">
+            <div class="pro-box-title">📢 Настройка рекламного баннера</div>
+            <div class="field" style="margin-bottom: 10px;">
+              <label for="adModeSelect">Формат показа рекламы</label>
+              <select id="adModeSelect">
+                <option value="bottom_overlay" selected>📌 Внизу на весь ролик (аккуратно, не перекрывает)</option>
+                <option value="midroll_pause">⏸ Посреди ролика по центру + Пауза + Своя озвучка</option>
+              </select>
+            </div>
+            <div class="form-grid">
+              <div class="field">
+                <label for="adBannerSelect">Картинка баннера (PNG / JPG)</label>
+                <div class="music-row">
+                  <select id="adBannerSelect">
+                    <option value="">Баннер не выбран</option>
+                  </select>
+                  <input id="adBannerFileInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden />
+                  <button id="btnUploadAdBanner" type="button" class="btn btn-secondary btn-sm">+ Баннер</button>
+                </div>
+              </div>
+              <div class="field hidden" id="adAudioRow">
+                <label for="adAudioSelect">Озвучка паузы (MP3 / WAV — пауза ровно по длине)</label>
+                <div class="music-row">
+                  <select id="adAudioSelect">
+                    <option value="">Без озвучки (пауза 3.5 сек)</option>
+                  </select>
+                  <input id="adAudioFileInput" type="file" accept=".mp3,.wav,.m4a,.ogg" hidden />
+                  <button id="btnUploadAdAudio" type="button" class="btn btn-secondary btn-sm">+ Озвучка</button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div id="hookCustomBox" class="sub-box" style="margin-bottom: 12px;">
@@ -382,9 +419,13 @@
               <div class="preview-center-label" id="previewCenterLabel">9:16 HD 1080×1920</div>
             </div>
 
-            <!-- Live Watermark & Hook Banner Preview -->
+            <!-- Live Watermark, Hook Banner & Ad Banner Preview -->
             <div id="previewWatermark" class="preview-watermark hidden">@ttrezka</div>
             <div id="previewHookBanner" class="preview-hook-banner pos-between">ОН НЕ ОЖИДАЛ ТАКОГО!</div>
+            <div id="previewAdBanner" class="preview-ad-banner hidden">
+              <img id="previewAdImg" alt="" />
+              <span id="previewAdBadge" class="preview-ad-badge hidden">⏸ ПАУЗА + ОЗВУЧКА</span>
+            </div>
 
             <!-- Simulated TikTok right-side UI icons -->
             <div class="tiktok-ui-icons">

@@ -66,6 +66,19 @@
   const jumpCutsToggle = document.getElementById('jumpCutsToggle');
   const fps60Toggle = document.getElementById('fps60Toggle');
   const videoEnhanceToggle = document.getElementById('videoEnhanceToggle');
+  const adBannerToggle = document.getElementById('adBannerToggle');
+  const adBannerBox = document.getElementById('adBannerBox');
+  const adModeSelect = document.getElementById('adModeSelect');
+  const adBannerSelect = document.getElementById('adBannerSelect');
+  const adBannerFileInput = document.getElementById('adBannerFileInput');
+  const btnUploadAdBanner = document.getElementById('btnUploadAdBanner');
+  const adAudioRow = document.getElementById('adAudioRow');
+  const adAudioSelect = document.getElementById('adAudioSelect');
+  const adAudioFileInput = document.getElementById('adAudioFileInput');
+  const btnUploadAdAudio = document.getElementById('btnUploadAdAudio');
+  const previewAdBanner = document.getElementById('previewAdBanner');
+  const previewAdImg = document.getElementById('previewAdImg');
+  const previewAdBadge = document.getElementById('previewAdBadge');
   const ollamaRow = document.getElementById('ollamaRow');
   const ollamaSelect = document.getElementById('ollamaSelect');
   const geminiKeyInput = document.getElementById('geminiKeyInput');
@@ -256,7 +269,37 @@
 
     await refreshMusicList();
     await refreshAvatarList();
+    await refreshAdsList();
     await refreshHistory();
+  }
+
+  async function refreshAdsList() {
+    try {
+      const res = await fetch('/api/ads');
+      const data = await res.json();
+      const prevB = adBannerSelect.value;
+      const prevA = adAudioSelect.value;
+      adBannerSelect.innerHTML = '<option value="">Баннер не выбран</option>';
+      (data.banners || []).forEach((b) => {
+        const opt = document.createElement('option');
+        opt.value = b.id;
+        opt.textContent = `🖼️ ${b.name}`;
+        adBannerSelect.appendChild(opt);
+      });
+      if (prevB) adBannerSelect.value = prevB;
+      else if (data.banners && data.banners.length > 0) adBannerSelect.value = data.banners[0].id;
+
+      adAudioSelect.innerHTML = '<option value="">Без озвучки (пауза 3.5 сек)</option>';
+      (data.audios || []).forEach((a) => {
+        const opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = `🎙 ${a.name} (${a.duration || 0}с)`;
+        adAudioSelect.appendChild(opt);
+      });
+      if (prevA) adAudioSelect.value = prevA;
+      else if (data.audios && data.audios.length > 0) adAudioSelect.value = data.audios[0].id;
+      updateLivePreview();
+    } catch (_) {}
   }
 
   async function refreshAvatarList() {
@@ -446,6 +489,17 @@
       }
       liveSubText.appendChild(span);
     });
+
+    if (previewAdBanner && previewAdImg && previewAdBadge) {
+      const adOn = !!(adBannerToggle && adBannerToggle.checked && adBannerSelect && adBannerSelect.value);
+      previewAdBanner.classList.toggle('hidden', !adOn);
+      if (adOn) {
+        const isMid = adModeSelect && adModeSelect.value === 'midroll_pause';
+        previewAdBanner.classList.toggle('mode-midroll', isMid);
+        previewAdBadge.classList.toggle('hidden', !isMid);
+        previewAdImg.src = `/api/ads/${encodeURIComponent(adBannerSelect.value)}`;
+      }
+    }
   }
 
   // Upload handlers
@@ -685,6 +739,66 @@
   if (hookBgColor) hookBgColor.addEventListener('input', updateLivePreview);
   if (hookBorderColor) hookBorderColor.addEventListener('input', updateLivePreview);
   if (hookTransparentBg) hookTransparentBg.addEventListener('change', updateLivePreview);
+  if (adBannerToggle) {
+    adBannerToggle.addEventListener('change', () => {
+      adBannerBox.classList.toggle('hidden', !adBannerToggle.checked);
+      updateLivePreview();
+    });
+  }
+  if (adModeSelect) {
+    adModeSelect.addEventListener('change', () => {
+      adAudioRow.classList.toggle('hidden', adModeSelect.value !== 'midroll_pause');
+      updateLivePreview();
+    });
+  }
+  if (adBannerSelect) adBannerSelect.addEventListener('change', updateLivePreview);
+  if (btnUploadAdBanner && adBannerFileInput) {
+    btnUploadAdBanner.addEventListener('click', () => adBannerFileInput.click());
+    adBannerFileInput.addEventListener('change', async () => {
+      const file = adBannerFileInput.files && adBannerFileInput.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      btnUploadAdBanner.disabled = true;
+      try {
+        const res = await fetch('/api/ads/banner', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки баннера');
+        await refreshAdsList();
+        adBannerSelect.value = data.id;
+        updateLivePreview();
+        showToast(`Баннер «${data.name}» загружен!`);
+      } catch (err) {
+        showToast(err.message || 'Ошибка загрузки баннера');
+      } finally {
+        btnUploadAdBanner.disabled = false;
+        adBannerFileInput.value = '';
+      }
+    });
+  }
+  if (btnUploadAdAudio && adAudioFileInput) {
+    btnUploadAdAudio.addEventListener('click', () => adAudioFileInput.click());
+    adAudioFileInput.addEventListener('change', async () => {
+      const file = adAudioFileInput.files && adAudioFileInput.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      btnUploadAdAudio.disabled = true;
+      try {
+        const res = await fetch('/api/ads/audio', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки озвучки');
+        await refreshAdsList();
+        adAudioSelect.value = data.id;
+        showToast(`Озвучка «${data.name}» (${data.duration}с) загружена!`);
+      } catch (err) {
+        showToast(err.message || 'Ошибка загрузки озвучки');
+      } finally {
+        btnUploadAdAudio.disabled = false;
+        adAudioFileInput.value = '';
+      }
+    });
+  }
   watermarkInput.addEventListener('input', updateLivePreview);
 
   btnUploadMusic.addEventListener('click', () => musicFileInput.click());
@@ -795,6 +909,10 @@
       bg_music_volume: 0.18,
       target_fps: fps60Toggle && fps60Toggle.checked ? 60 : 30,
       video_enhance: !!(videoEnhanceToggle && videoEnhanceToggle.checked),
+      enable_ad_banner: !!(adBannerToggle && adBannerToggle.checked),
+      ad_mode: adModeSelect ? adModeSelect.value : 'bottom_overlay',
+      ad_banner_id: adBannerSelect ? adBannerSelect.value || null : null,
+      ad_audio_id: adAudioSelect ? adAudioSelect.value || null : null,
       search_chat_activity: searchChatToggle ? searchChatToggle.checked : true,
       search_laughter: searchLaughterToggle ? searchLaughterToggle.checked : true,
       use_ai_director: useAiDirectorToggle ? useAiDirectorToggle.checked : true,

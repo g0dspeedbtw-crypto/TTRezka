@@ -572,6 +572,102 @@ def _build_video_framing_chain(
     )
 
 
+def _prepare_banner_png(banner_path: Path, max_w: int, max_h: int, dest_png: Path) -> Tuple[int, int]:
+    """Scale ad banner preserving aspect ratio into a crisp RGBA PNG."""
+    im = Image.open(banner_path).convert("RGBA")
+    im.thumbnail((max_w, max_h), Image.LANCZOS)
+    im.save(dest_png)
+    return im.size
+
+
+def _insert_midroll_ad(
+    base_mp4: Path,
+    final_mp4: Path,
+    ad_banner_path: Path,
+    ad_audio_path: Optional[Path],
+    out_fps: int,
+    tmp_dir: Path,
+    enc_args: List[str],
+) -> None:
+    """
+    Freeze the clip at its midpoint for the EXACT duration of the ad voiceover audio,
+    display the ad banner centered over the dimmed freeze frame while playing the voiceover,
+    then seamlessly resume the clip!
+    """
+    base_meta = probe_video(base_mp4)
+    base_dur = float(base_meta.get("duration") or 10.0)
+    mid_t = max(1.0, base_dur * 0.5)
+
+    # Exact pause duration = exact voiceover audio duration!
+    pause_dur = 3.5
+    has_ad_audio = bool(ad_audio_path and Path(ad_audio_path).exists())
+    if has_ad_audio:
+        try:
+            a_meta = probe_video(Path(ad_audio_path))
+            if a_meta.get("duration") and float(a_meta["duration"]) >= 0.4:
+                pause_dur = float(a_meta["duration"])
+        except Exception:
+            pass
+
+    # 1. Extract exact freeze frame at mid_t
+    freeze_raw = tmp_dir / "freeze_raw.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", f"{mid_t:.3f}", "-i", str(base_mp4), "-vframes", "1", str(freeze_raw)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+    # 2. Composite dimmed freeze frame + centered ad banner with Pillow
+    bg = Image.open(freeze_raw).convert("RGBA").resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
+    dim = Image.new("RGBA", (VIDEO_W, VIDEO_H), (0, 0, 0, 118))
+    bg = Image.alpha_composite(bg, dim)
+
+    banner = Image.open(ad_banner_path).convert("RGBA")
+    banner.thumbnail((940, 780), Image.LANCZOS)
+    bw, bh = banner.size
+    bx = (VIDEO_W - bw) // 2
+    by = (VIDEO_H - bh) // 2
+    bg.paste(banner, (bx, by), banner)
+
+    mid_frame = tmp_dir / "midroll_frame.png"
+    bg.convert("RGB").save(mid_frame)
+
+    # 3. Single-pass FFmpeg filter_complex: [Part 1] + [Freeze+Ad+Voiceover] + [Part 2]
+    inputs: List[str] = [
+        "-i", str(base_mp4),
+        "-loop", "1", "-t", f"{pause_dur:.3f}", "-i", str(mid_frame),
+    ]
+    if has_ad_audio:
+        inputs.extend(["-i", str(ad_audio_path)])
+        ad_a_chain = f"[2:a]atrim=0:{pause_dur:.3f},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[ad_a];"
+    else:
+        ad_a_chain = f"anullsrc=r=48000:cl=stereo:d={pause_dur:.3f}[ad_a];"
+
+    fc = (
+        f"[0:v]split=2[v0a][v0b];"
+        f"[0:a]asplit=2[a0a][a0b];"
+        f"[v0a]trim=0:{mid_t:.3f},setpts=PTS-STARTPTS,fps={out_fps},format=yuv420p[v1];"
+        f"[a0a]atrim=0:{mid_t:.3f},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a1];"
+        f"[1:v]fps={out_fps},format=yuv420p,setpts=PTS-STARTPTS[ad_v];"
+        f"{ad_a_chain}"
+        f"[v0b]trim=start={mid_t:.3f},setpts=PTS-STARTPTS,fps={out_fps},format=yuv420p[v2];"
+        f"[a0b]atrim=start={mid_t:.3f},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a2];"
+        f"[v1][a1][ad_v][ad_a][v2][a2]concat=n=3:v=1:a=1[outv][outa]"
+    )
+
+    cmd = [
+        "ffmpeg", "-y", *inputs,
+        "-filter_complex", fc,
+        "-map", "[outv]", "-map", "[outa]",
+        *enc_args,
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(final_mp4),
+    ]
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if res.returncode != 0 or not final_mp4.exists():
+        raise RuntimeError(f"Midroll ad insertion failed: {res.stderr[-400:]}")
+
+
 def render_clip(
     source_video: Path,
     output_mp4: Path,
@@ -602,6 +698,9 @@ def render_clip(
     bg_music_volume: float = 0.18,
     target_fps: int = 30,
     video_enhance: bool = False,
+    ad_mode: Optional[str] = None,
+    ad_banner_path: Optional[Path] = None,
+    ad_audio_path: Optional[Path] = None,
 ) -> Path:
     """
     Render a 1080x1920 9:16 TikTok MP4 clip with optional subtitles,
@@ -616,6 +715,18 @@ def render_clip(
 
     pos_y_map = {"center": 740, "lower_third": 1160, "bottom": 1340}
     overlay_y = pos_y_map.get(position, 1160)
+    has_bottom_ad = (
+        ad_mode == "bottom_overlay"
+        and ad_banner_path is not None
+        and Path(ad_banner_path).exists()
+    )
+    has_midroll_ad = (
+        ad_mode == "midroll_pause"
+        and ad_banner_path is not None
+        and Path(ad_banner_path).exists()
+    )
+    if has_bottom_ad and overlay_y > 1020:
+        overlay_y = 1020
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="tikcut_sub_"))
     try:
@@ -698,6 +809,14 @@ def render_clip(
             wm_idx = next_idx
             next_idx += 1
 
+        ad_bottom_idx: Optional[int] = None
+        if has_bottom_ad:
+            ad_png = tmp_dir / "ad_bottom.png"
+            _prepare_banner_png(Path(ad_banner_path), 920, 175, ad_png)
+            inputs.extend(["-i", str(ad_png)])
+            ad_bottom_idx = next_idx
+            next_idx += 1
+
         music_idx: Optional[int] = None
         if bg_music_path and Path(bg_music_path).exists():
             inputs.extend(["-stream_loop", "-1", "-i", str(bg_music_path)])
@@ -747,6 +866,10 @@ def render_clip(
             fc += f"[{cur_v}][{wm_idx}:v]overlay=x=0:y=48[v_wm];"
             cur_v = "v_wm"
 
+        if ad_bottom_idx is not None:
+            fc += f"[{cur_v}][{ad_bottom_idx}:v]overlay=x=(W-w)/2:y=H-h-68[v_ad];"
+            cur_v = "v_ad"
+
         # Audio chain (with optional auto-ducking background music)
         audio_map = "0:a?"
         if music_idx is not None:
@@ -781,6 +904,8 @@ def render_clip(
             encoders.append(["-c:v", "h264_videotoolbox", "-b:v", bitrate, "-pix_fmt", "yuv420p"])
         encoders.append(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
 
+        render_target = (tmp_dir / "pre_midroll.mp4") if has_midroll_ad else output_mp4
+        used_enc_args = encoders[-1]
         last_err = ""
         for enc_args in encoders:
             cmd = [
@@ -800,14 +925,26 @@ def render_clip(
                 "192k",
                 "-movflags",
                 "+faststart",
-                str(output_mp4),
+                str(render_target),
             ]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if res.returncode == 0 and output_mp4.exists() and output_mp4.stat().st_size > 1024:
+            if res.returncode == 0 and render_target.exists() and render_target.stat().st_size > 1024:
+                used_enc_args = enc_args
                 break
             last_err = res.stderr[-500:]
         else:
             raise RuntimeError(f"FFmpeg clip render failed: {last_err}")
+
+        if has_midroll_ad:
+            _insert_midroll_ad(
+                base_mp4=render_target,
+                final_mp4=output_mp4,
+                ad_banner_path=Path(ad_banner_path),
+                ad_audio_path=Path(ad_audio_path) if ad_audio_path else None,
+                out_fps=out_fps,
+                tmp_dir=tmp_dir,
+                enc_args=used_enc_args,
+            )
 
         # Generate crisp preview thumbnail at ~25% into the clip
         thumb_t = min(max(0.5, clip_duration * 0.25), max(0.1, clip_duration - 0.2))

@@ -212,11 +212,16 @@ def _score_window(
     # 2. Comedy / Reaction & Hook Language Score (0..1)
     comedy_score, hook_score, ad_penalty = score_russian_text_fun_and_hooks(text, starts_after_pause)
 
-    # 3. Speech Pacing & Excitement Speedup (0..1)
+    # 3. Speech Pacing & Hard Penalty for wordless/music-only clips!
     word_count = len(window_words)
     wps = word_count / duration
-    if wps < 0.5:
-        speech_score = 0.12
+    wordless_penalty = 0.0
+    if word_count < 6 or wps < 0.35:
+        speech_score = 0.0
+        wordless_penalty = 0.55
+    elif word_count < 12 or wps < 0.65:
+        speech_score = 0.15
+        wordless_penalty = 0.28
     elif wps <= 4.2:
         speech_score = min(1.0, 0.25 + (wps / 3.4) * 0.75)
     else:
@@ -251,6 +256,7 @@ def _score_window(
             + 0.04 * visual_score
             - ad_penalty
             - edge_penalty
+            - wordless_penalty
         )
     else:
         raw_total = (
@@ -261,6 +267,7 @@ def _score_window(
             + 0.10 * visual_score
             - ad_penalty
             - edge_penalty
+            - wordless_penalty
         )
     raw_total = max(0.05, min(1.0, raw_total))
     viral_score = int(round(min(99, max(48, 44 + raw_total * 56))))
@@ -305,18 +312,34 @@ def _make_clip_title(text: str, index: int) -> str:
     return candidate[0].upper() + candidate[1:] if candidate else f"Топ момент #{index}"
 
 
-def _find_audio_peak_times(rms: np.ndarray, burst: np.ndarray, bin_sec: float, top_k: int = 24) -> List[float]:
-    """Locate distinct local maxima in combined loudness + laughter burstiness."""
-    if len(rms) < 12:
+def _find_audio_peak_times(rms: np.ndarray, burst: np.ndarray, bin_sec: float, top_k: int = 28) -> List[float]:
+    """
+    Locate distinct local maxima of SUDDEN laughter / shouting / shock explosions
+    relative to a rolling 45-second baseline (so constantly loud games don't fool it!).
+    """
+    if len(rms) < 16:
         return []
-    k = 8  # 2-second smoothing window
-    kernel = np.ones(k, dtype=np.float32) / k
-    combined = (rms / (np.mean(rms) + 1e-6)) + 0.8 * (burst / (np.mean(burst) + 1e-6))
-    smooth = np.convolve(combined, kernel, mode="same")
+    k_short = max(4, int(round(2.0 / bin_sec)))    # 2.0s burst window
+    k_long = max(24, int(round(45.0 / bin_sec)))   # 45s local baseline
+    k_long = min(k_long, len(rms))
 
-    order = np.argsort(smooth)[::-1]
+    # Combined loudness + vocal laughter modulation
+    norm_rms = rms / (np.median(rms) + 1e-6)
+    norm_burst = burst / (np.median(burst) + 1e-6)
+    combined = 0.45 * norm_rms + 0.55 * norm_burst
+
+    short_avg = np.convolve(combined, np.ones(k_short, dtype=np.float32) / k_short, mode="same")
+    long_avg = np.convolve(combined, np.ones(k_long, dtype=np.float32) / k_long, mode="same")
+
+    # Relative spike score: how much louder/more modulated than the surrounding 45 seconds!
+    rel_spike = short_avg / (long_avg + 0.35)
+    # Require the peak to also be genuinely energetic globally (not a cough in silence)
+    energy_gate = np.clip(short_avg / (np.percentile(short_avg, 70) + 1e-6), 0.2, 2.5)
+    final_score = rel_spike * energy_gate
+
+    order = np.argsort(final_score)[::-1]
     peaks: List[float] = []
-    min_sep_sec = 14.0
+    min_sep_sec = 16.0
     for idx in order:
         t = float(idx) * bin_sec
         if all(abs(t - p) >= min_sep_sec for p in peaks):
