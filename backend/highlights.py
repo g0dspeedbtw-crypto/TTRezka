@@ -165,17 +165,19 @@ def _score_window(
     scene_times: List[float],
     starts_after_pause: bool,
     search_laughter: bool = True,
+    search_screams: bool = True,
 ) -> Dict[str, Any]:
     duration = max(1.0, end - start)
 
-    # 1. Localized Peak Burst & Setup->Punchline Contrast (0..1)
+    # 1. Separate acoustic detectors:
+    #    - scream_score: sustained loud RMS spikes vs calm setup (rage / yelling / shock)
+    #    - laugh_score: staccato amplitude-modulated bursts (mod_var + ZCR, characteristic of "ha-ha-ha")
     b0 = max(0, int(start / bin_sec))
     b1 = min(len(rms), max(b0 + 1, int(math.ceil(end / bin_sec))))
     seg_rms = rms[b0:b1]
     seg_burst = burst[b0:b1]
 
     if len(seg_rms) >= 8:
-        # Smooth with 1.5s moving average to find genuine 2-5s laughter/rage bursts (not 1-frame pops)
         k = min(6, len(seg_rms))
         kernel = np.ones(k, dtype=np.float32) / k
         smooth_rms = np.convolve(seg_rms, kernel, mode="valid")
@@ -183,30 +185,42 @@ def _score_window(
         peak_val = float(smooth_rms[peak_idx])
         peak_z = (peak_val - global_rms_mean) / (global_rms_std + 1e-6)
 
-        # Contrast: calm setup BEFORE the peak -> sudden explosion AT the peak!
         setup_slice = seg_rms[: max(1, peak_idx)]
         setup_mean = float(np.mean(setup_slice)) if len(setup_slice) > 2 else global_rms_mean
         contrast = peak_val / (setup_mean + 1e-5)
 
-        # Laughter / excitement burst ratio
-        burst_ratio = float(np.mean(seg_burst > global_burst_p85))
-
-        # Sweet spot: peak occurs in middle-to-end of clip (30%..88%) so viewer sees setup + reaction!
         peak_rel_pos = peak_idx / max(1, len(smooth_rms))
         arc_bonus = 0.14 if (0.28 <= peak_rel_pos <= 0.88) else 0.0
 
-        audio_peak_score = min(
+        # Scream / Loud Rage Score (pure loudness spike + contrast)
+        scream_score = min(
             1.0,
             max(
                 0.0,
-                0.20
-                + min(0.38, max(0.0, peak_z) * 0.19)
-                + min(0.24, max(0.0, contrast - 1.15) * 0.20)
-                + min(0.22, burst_ratio * 0.75)
+                0.18
+                + min(0.46, max(0.0, peak_z) * 0.22)
+                + min(0.28, max(0.0, contrast - 1.15) * 0.24)
                 + arc_bonus,
             ),
         )
+
+        # Laughter Score (rhythmic vocal burstiness / staccato modulation)
+        burst_ratio = float(np.mean(seg_burst > global_burst_p85))
+        p92_burst = float(np.percentile(seg_burst, 92)) / (global_burst_p85 + 1e-6)
+        laugh_score = min(
+            1.0,
+            max(
+                0.0,
+                0.16
+                + min(0.44, burst_ratio * 1.15)
+                + min(0.32, max(0.0, p92_burst - 0.75) * 0.35)
+                + arc_bonus * 0.7,
+            ),
+        )
+        audio_peak_score = 0.5 * laugh_score + 0.5 * scream_score
     else:
+        scream_score = 0.3
+        laugh_score = 0.3
         audio_peak_score = 0.3
 
     # 2. Comedy / Reaction & Hook Language Score (0..1)
@@ -227,7 +241,6 @@ def _score_window(
     else:
         speech_score = 0.82
 
-    # Penalize boring dead silences (> 2.2s)
     max_gap = 0.0
     for i in range(1, len(window_words)):
         gap = window_words[i]["start"] - window_words[i - 1]["end"]
@@ -241,16 +254,16 @@ def _score_window(
     cuts_per_10s = cuts_in_window / (duration / 10.0)
     visual_score = min(1.0, 0.2 + cuts_per_10s * 0.25) if scene_times else 0.4
 
-    # Slight penalty for very first 12s / very last 12s of long videos (usually intro/outro)
     edge_penalty = 0.0
     if total_duration > 120:
         if start < 10.0 or end > (total_duration - 10.0):
             edge_penalty = 0.14
 
-    if search_laughter:
+    if search_laughter and search_screams:
         raw_total = (
-            0.40 * audio_peak_score
-            + 0.36 * comedy_score
+            0.24 * laugh_score
+            + 0.22 * scream_score
+            + 0.30 * comedy_score
             + 0.12 * hook_score
             + 0.08 * speech_score
             + 0.04 * visual_score
@@ -258,13 +271,34 @@ def _score_window(
             - edge_penalty
             - wordless_penalty
         )
+    elif search_laughter:
+        raw_total = (
+            0.42 * laugh_score
+            + 0.36 * comedy_score
+            + 0.12 * hook_score
+            + 0.07 * speech_score
+            + 0.03 * visual_score
+            - ad_penalty
+            - edge_penalty
+            - wordless_penalty
+        )
+    elif search_screams:
+        raw_total = (
+            0.48 * scream_score
+            + 0.22 * hook_score
+            + 0.16 * speech_score
+            + 0.08 * comedy_score
+            + 0.06 * visual_score
+            - ad_penalty
+            - edge_penalty
+            - wordless_penalty
+        )
     else:
         raw_total = (
-            0.28 * audio_peak_score
-            + 0.14 * comedy_score
-            + 0.30 * hook_score
-            + 0.18 * speech_score
-            + 0.10 * visual_score
+            0.14 * comedy_score
+            + 0.40 * hook_score
+            + 0.32 * speech_score
+            + 0.14 * visual_score
             - ad_penalty
             - edge_penalty
             - wordless_penalty
@@ -273,11 +307,11 @@ def _score_window(
     viral_score = int(round(min(99, max(48, 44 + raw_total * 56))))
 
     tags: List[str] = []
-    if comedy_score >= 0.42:
-        tags.append("😂 Смешной / Реакция")
-    if audio_peak_score >= 0.66:
-        tags.append("🔥 Пик эмоций")
-    if hook_score >= 0.52:
+    if search_laughter and (laugh_score >= 0.58 or comedy_score >= 0.44):
+        tags.append("😂 Смех стримера")
+    if search_screams and scream_score >= 0.64:
+        tags.append("📢 Крик / Эмоция")
+    if hook_score >= 0.52 and len(tags) < 3:
         tags.append("💬 Сильный хук")
     if speech_score >= 0.74 and len(tags) < 3:
         tags.append("⚡ Живая подача")
@@ -288,6 +322,8 @@ def _score_window(
         "viral_score": viral_score,
         "raw_total": raw_total,
         "audio_score": round(audio_peak_score, 3),
+        "laugh_score": round(laugh_score, 3),
+        "scream_score": round(scream_score, 3),
         "comedy_score": round(comedy_score, 3),
         "hook_score": round(hook_score, 3),
         "speech_score": round(speech_score, 3),
@@ -312,9 +348,15 @@ def _make_clip_title(text: str, index: int) -> str:
     return candidate[0].upper() + candidate[1:] if candidate else f"Топ момент #{index}"
 
 
-def _find_audio_peak_times(rms: np.ndarray, burst: np.ndarray, bin_sec: float, top_k: int = 28) -> List[float]:
+def _find_audio_peak_times(
+    rms: np.ndarray,
+    burst: np.ndarray,
+    bin_sec: float,
+    top_k: int = 28,
+    mode: str = "both",
+) -> List[float]:
     """
-    Locate distinct local maxima of SUDDEN laughter / shouting / shock explosions
+    Locate distinct local maxima of SUDDEN laughter ('laugh' -> burst) or shouting ('scream' -> rms)
     relative to a rolling 45-second baseline (so constantly loud games don't fool it!).
     """
     if len(rms) < 16:
@@ -323,10 +365,14 @@ def _find_audio_peak_times(rms: np.ndarray, burst: np.ndarray, bin_sec: float, t
     k_long = max(24, int(round(45.0 / bin_sec)))   # 45s local baseline
     k_long = min(k_long, len(rms))
 
-    # Combined loudness + vocal laughter modulation
     norm_rms = rms / (np.median(rms) + 1e-6)
     norm_burst = burst / (np.median(burst) + 1e-6)
-    combined = 0.45 * norm_rms + 0.55 * norm_burst
+    if mode == "laugh":
+        combined = 0.20 * norm_rms + 0.80 * norm_burst
+    elif mode == "scream":
+        combined = 0.85 * norm_rms + 0.15 * norm_burst
+    else:
+        combined = 0.45 * norm_rms + 0.55 * norm_burst
 
     short_avg = np.convolve(combined, np.ones(k_short, dtype=np.float32) / k_short, mode="same")
     long_avg = np.convolve(combined, np.ones(k_long, dtype=np.float32) / k_long, mode="same")
@@ -359,6 +405,7 @@ def find_highlights(
     min_duration: float = 20.0,
     max_duration: float = 55.0,
     search_laughter: bool = True,
+    search_screams: bool = True,
     shuffle_seed: int = 0,
     exclude_ranges: Optional[List[Tuple[float, float]]] = None,
     progress_cb: Optional[Callable[[float, str], None]] = None,
@@ -416,6 +463,7 @@ def find_highlights(
             start_t, end_t, total_duration, txt, w_list,
             rms, burst, bin_sec, global_mean, global_std, global_burst_p85, scene_times, after_pause,
             search_laughter=search_laughter,
+            search_screams=search_screams,
         )
         candidates.append(
             {
@@ -430,7 +478,8 @@ def find_highlights(
     if segments:
         n_seg = len(segments)
         # 1. Peak-Anchored Windows: build Setup (~15s before peak) -> Peak -> Reaction (~12s after peak)
-        peak_times = _find_audio_peak_times(rms, burst, bin_sec, top_k=max(20, clip_count * 4))
+        peak_mode = "both" if (search_laughter and search_screams) else ("laugh" if search_laughter else ("scream" if search_screams else "both"))
+        peak_times = _find_audio_peak_times(rms, burst, bin_sec, top_k=max(20, clip_count * 4), mode=peak_mode)
         for pt in peak_times:
             desired_start = max(0.0, pt - min(18.0, min_duration * 0.65))
             desired_end = min(total_duration, pt + min(16.0, max_duration * 0.38))

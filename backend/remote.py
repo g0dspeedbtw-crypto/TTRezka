@@ -329,6 +329,7 @@ def find_remote_highlights(
     max_duration: float = 55.0,
     search_chat_activity: bool = True,
     search_laughter: bool = True,
+    search_screams: bool = True,
     shuffle_seed: int = 0,
     exclude_ranges: Optional[List[Tuple[float, float]]] = None,
     audio_wav_path: Optional[Path] = None,
@@ -336,42 +337,45 @@ def find_remote_highlights(
 ) -> List[Dict[str, Any]]:
     """
     Analyze a remote video or multi-hour stream WITHOUT downloading the full video!
-    Combines REAL acoustic laughter/scream bursts (lightweight audio) + Twitch Chat / YouTube Heatmap
+    Combines separate acoustic Laughter & Scream detectors (lightweight audio) + Twitch Chat / YouTube Heatmap
     (with chat-reaction lag offset!) + Russian comedy transcript hooks.
     """
     total_duration = float(remote_meta.get("duration") or 0)
     heatmap = (remote_meta.get("heatmap") or []) if search_chat_activity else []
     has_heatmap = len(heatmap) > 0
 
-    # Real local acoustic laughter & loud reaction detection from lightweight audio!
+    # Real local acoustic laughter (burst) & scream (rms) detection from lightweight audio!
     rms = None
     burst = None
     bin_sec = 0.25
     audio_peaks: List[float] = []
-    if search_laughter and audio_wav_path and Path(audio_wav_path).exists():
+    if (search_laughter or search_screams) and audio_wav_path and Path(audio_wav_path).exists():
         if progress_cb:
-            progress_cb(0.2, "😂 Локальный анализ смеха, криков и громких реакций стримера...")
+            progress_cb(0.2, "😂 Локальный анализ смеха и криков стримера...")
         try:
             rms, burst, bin_sec = compute_audio_features(Path(audio_wav_path), bin_sec=0.25)
-            audio_peaks = _find_audio_peak_times(rms, burst, bin_sec, top_k=max(24, clip_count * 4))
+            p_mode = "both" if (search_laughter and search_screams) else ("laugh" if search_laughter else "scream")
+            audio_peaks = _find_audio_peak_times(rms, burst, bin_sec, top_k=max(24, clip_count * 4), mode=p_mode)
         except Exception:
             rms, burst, audio_peaks = None, None, []
 
     if progress_cb:
-        progress_cb(0.45, "Анализ пиков чата, смеха и смешных моментов...")
+        progress_cb(0.45, "Анализ пиков чата, смеха и криков...")
 
-    def _audio_burst_score(s_t: float, e_t: float) -> float:
+    def _audio_split_scores(s_t: float, e_t: float) -> Tuple[float, float]:
         if rms is None or burst is None or len(rms) < 8:
-            return 0.0
+            return 0.0, 0.0
         b0 = max(0, int(s_t / bin_sec))
         b1 = min(len(rms), max(b0 + 1, int(math.ceil(e_t / bin_sec))))
         seg_r = rms[b0:b1]
         seg_b = burst[b0:b1]
         if len(seg_r) < 4:
-            return 0.0
+            return 0.0, 0.0
         p92_r = float(np.percentile(seg_r, 92)) / (float(np.median(rms)) + 1e-6)
         p92_b = float(np.percentile(seg_b, 92)) / (float(np.median(burst)) + 1e-6)
-        return min(1.0, max(0.0, 0.20 + 0.22 * (p92_r - 1.0) + 0.26 * (p92_b - 1.0)))
+        scream_sc = min(1.0, max(0.0, 0.18 + 0.34 * (p92_r - 1.0)))
+        laugh_sc = min(1.0, max(0.0, 0.18 + 0.36 * (p92_b - 1.0)))
+        return laugh_sc, scream_sc
 
     candidates: List[Dict[str, Any]] = []
     seen_ranges = set()
@@ -381,12 +385,14 @@ def find_remote_highlights(
         if key in seen_ranges:
             return
         seen_ranges.add(key)
-        a_sc = _audio_burst_score(s_t, e_t)
+        a_laugh, a_scream = _audio_split_scores(s_t, e_t)
         sc = _score_remote_window(
             s_t, e_t, total_duration, txt, w_list, heatmap, after_pause,
             search_chat_activity=search_chat_activity,
             search_laughter=search_laughter,
-            audio_laughter_score=a_sc,
+            search_screams=search_screams,
+            audio_laughter_score=a_laugh,
+            audio_scream_score=a_scream,
             has_transcript=bool(segments),
         )
         candidates.append(
@@ -555,7 +561,9 @@ def _score_remote_window(
     starts_after_pause: bool,
     search_chat_activity: bool = True,
     search_laughter: bool = True,
+    search_screams: bool = True,
     audio_laughter_score: float = 0.0,
+    audio_scream_score: float = 0.0,
     has_transcript: bool = True,
 ) -> Dict[str, Any]:
     duration = max(1.0, end - start)
@@ -589,13 +597,26 @@ def _score_remote_window(
         if start < 12.0 or end > (total_duration - 12.0):
             edge_penalty = 0.14
 
-    has_audio_sig = audio_laughter_score > 0.01
-    synergy_bonus = 0.16 if (has_audio_sig and audio_laughter_score >= 0.45 and hm_score >= 0.50) else 0.0
+    if search_laughter and search_screams:
+        active_audio = 0.52 * audio_laughter_score + 0.48 * audio_scream_score
+    elif search_laughter:
+        active_audio = audio_laughter_score
+    elif search_screams:
+        active_audio = audio_scream_score
+    else:
+        active_audio = 0.0
 
-    if has_audio_sig and heatmap and search_chat_activity and search_laughter:
-        raw_total = 0.36 * audio_laughter_score + 0.34 * hm_score + 0.18 * comedy_score + 0.07 * hook_score + 0.05 * speech_score + synergy_bonus - ad_penalty - edge_penalty
-    elif has_audio_sig and search_laughter:
-        raw_total = 0.52 * audio_laughter_score + 0.26 * comedy_score + 0.12 * hook_score + 0.10 * speech_score - ad_penalty - edge_penalty
+    has_audio_sig = active_audio > 0.01
+    synergy_bonus = 0.16 if (has_audio_sig and active_audio >= 0.45 and hm_score >= 0.50) else 0.0
+
+    if has_audio_sig and heatmap and search_chat_activity and (search_laughter or search_screams):
+        c_w = 0.18 if search_laughter else 0.08
+        h_w = 0.07 if search_laughter else 0.17
+        raw_total = 0.36 * active_audio + 0.34 * hm_score + c_w * comedy_score + h_w * hook_score + 0.05 * speech_score + synergy_bonus - ad_penalty - edge_penalty
+    elif has_audio_sig and (search_laughter or search_screams):
+        c_w = 0.26 if search_laughter else 0.10
+        h_w = 0.12 if search_laughter else 0.28
+        raw_total = 0.52 * active_audio + c_w * comedy_score + h_w * hook_score + 0.10 * speech_score - ad_penalty - edge_penalty
     elif heatmap and search_chat_activity:
         if search_laughter:
             raw_total = 0.46 * hm_score + 0.34 * comedy_score + 0.12 * hook_score + 0.08 * speech_score - ad_penalty - edge_penalty
@@ -611,12 +632,14 @@ def _score_remote_window(
     viral_score = int(round(min(99, max(48, 44 + raw_total * 56))))
 
     tags: List[str] = []
-    if has_audio_sig and audio_laughter_score >= 0.56:
-        tags.append("😂 Смех / Крик стримера")
+    if search_laughter and audio_laughter_score >= 0.54:
+        tags.append("😂 Смех стримера")
+    if search_screams and audio_scream_score >= 0.58:
+        tags.append("📢 Крик / Эмоция")
     if heatmap and hm_score >= 0.50:
         is_tw = any(h.get("source") == "twitch_chat" for h in heatmap[:3])
         tags.append("💬 Взрыв чата Twitch" if is_tw else "📈 Пик пересмотров")
-    if comedy_score >= 0.40 and len(tags) < 3:
+    if search_laughter and comedy_score >= 0.40 and len(tags) < 3:
         tags.append("🤣 Смешная реакция")
     if hook_score >= 0.52 and len(tags) < 3:
         tags.append("💬 Сильный хук")
@@ -627,6 +650,7 @@ def _score_remote_window(
         "viral_score": viral_score,
         "raw_total": raw_total,
         "audio_laughter_score": round(audio_laughter_score, 3),
+        "audio_scream_score": round(audio_scream_score, 3),
         "heatmap_score": round(hm_score, 3),
         "comedy_score": round(comedy_score, 3),
         "hook_score": round(hook_score, 3),

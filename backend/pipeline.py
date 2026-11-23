@@ -295,6 +295,7 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         use_ai = bool(options.get("use_ai_director", True))
         search_chat = bool(options.get("search_chat_activity", True))
         search_laugh = bool(options.get("search_laughter", True))
+        search_screams = bool(options.get("search_screams", True))
         shuffle_seed = int(options.get("shuffle_seed") or 0)
         exclude_ranges = options.get("_exclude_ranges") or []
 
@@ -350,18 +351,18 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             except Exception as exc:
                 print(f"[ai_director] Ollama failed ({exc}), falling back to local detector")
 
-        # Download ONLY lightweight audio (no video!) when search_laughter is ON so we detect REAL laughter/screams!
+        # Download ONLY lightweight audio (no video!) when laughter or screams search is ON!
         light_wav: Optional[Path] = None
-        if search_laugh:
+        if search_laugh or search_screams:
             _update_job(
                 job_id,
                 stage="analyzing",
                 progress=24,
-                message="😂 Загрузка лёгкой аудиодорожки для локального поиска смеха и криков стримера...",
+                message="😂 Загрузка лёгкой аудиодорожки для локального поиска смеха и криков...",
             )
             light_wav = download_lightweight_audio(remote_url, jdir / "light_audio.wav")
 
-        # Fallback (or Shuffle mode): Local Acoustic Laughter + Twitch Chat / YouTube Heatmap Detector
+        # Fallback (or Shuffle mode): Local Acoustic Laughter/Screams + Twitch Chat / YouTube Heatmap Detector
         if not highlights:
             highlights = find_remote_highlights(
                 remote_meta=remote_meta,
@@ -372,6 +373,7 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 max_duration=max_dur,
                 search_chat_activity=search_chat,
                 search_laughter=search_laugh,
+                search_screams=search_screams,
                 shuffle_seed=shuffle_seed,
                 exclude_ranges=exclude_ranges,
                 audio_wav_path=light_wav,
@@ -550,6 +552,7 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         saved_cfg = load_settings()
         use_ai = bool(options.get("use_ai_director", True))
         search_laugh = bool(options.get("search_laughter", True))
+        search_screams = bool(options.get("search_screams", True))
         shuffle_seed = int(options.get("shuffle_seed") or 0)
         exclude_ranges = options.get("_exclude_ranges") or []
 
@@ -567,12 +570,13 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                     hl["transcript"] = " ".join(seg_words).strip()
                 _update_job(job_id, stage="analyzing", progress=66, message=f"Вырезка по {len(highlights)} заданным таймкодам...")
 
-        # Compute audio laughter/excitement peaks to annotate transcript for the AI Comedy Director!
+        # Compute audio laughter/scream peaks to annotate transcript for the AI Comedy Director!
         local_peak_times: List[float] = []
-        if not highlights and search_laugh:
+        if not highlights and (search_laugh or search_screams):
             try:
                 _rms, _burst, _bsec = compute_audio_features(wav_path, bin_sec=0.25)
-                local_peak_times = _find_audio_peak_times(_rms, _burst, _bsec, top_k=24)
+                _pmode = "both" if (search_laugh and search_screams) else ("laugh" if search_laugh else "scream")
+                local_peak_times = _find_audio_peak_times(_rms, _burst, _bsec, top_k=24, mode=_pmode)
             except Exception:
                 pass
 
@@ -618,6 +622,7 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 min_duration=min_dur,
                 max_duration=max_dur,
                 search_laughter=search_laugh,
+                search_screams=search_screams,
                 shuffle_seed=shuffle_seed,
                 exclude_ranges=exclude_ranges,
                 progress_cb=on_highlights,

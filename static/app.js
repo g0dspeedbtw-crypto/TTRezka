@@ -86,6 +86,7 @@
   const hookTransparentBg = document.getElementById('hookTransparentBg');
   const searchChatToggle = document.getElementById('searchChatToggle');
   const searchLaughterToggle = document.getElementById('searchLaughterToggle');
+  const searchScreamsToggle = document.getElementById('searchScreamsToggle');
   const useAiDirectorToggle = document.getElementById('useAiDirectorToggle');
   const jumpCutsToggle = document.getElementById('jumpCutsToggle');
   const fps60Toggle = document.getElementById('fps60Toggle');
@@ -1407,6 +1408,7 @@
       manual_timecodes: manualTimecodesInput ? (manualTimecodesInput.value || '').trim() || null : null,
       search_chat_activity: searchChatToggle ? searchChatToggle.checked : true,
       search_laughter: searchLaughterToggle ? searchLaughterToggle.checked : true,
+      search_screams: searchScreamsToggle ? searchScreamsToggle.checked : true,
       use_ai_director: useAiDirectorToggle ? useAiDirectorToggle.checked : true,
       shuffle_seed: shuffleSeed,
       ollama_model: ollamaSelect ? ollamaSelect.value || null : null,

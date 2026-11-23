@@ -123,6 +123,7 @@ class ProcessRequest(BaseModel):
     manual_timecodes: Optional[str] = Field(default=None)
     search_chat_activity: bool = Field(default=True)
     search_laughter: bool = Field(default=True)
+    search_screams: bool = Field(default=True)
     use_ai_director: bool = Field(default=True)
     shuffle_seed: int = Field(default=0)
     ollama_model: Optional[str] = Field(default=None)
