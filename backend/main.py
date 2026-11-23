@@ -57,6 +57,7 @@ from backend.pipeline import (
     rerender_single_clip,
     start_batch_urls,
     start_processing,
+    update_clip_title,
 )
 from backend.remote import probe_remote_url
 from backend.renderer import extract_preview_frame, probe_video
@@ -70,6 +71,7 @@ from backend.studio_extras import (
     list_plan_items,
     update_plan_item,
 )
+from backend.telegram_export import send_clip_to_telegram, test_telegram_connection
 from backend.twitch_radar import capture_live_stream_clip, fetch_twitch_top_clips
 
 app = FastAPI(title="TikCut Studio", version="1.0.0")
@@ -129,6 +131,7 @@ class ProcessRequest(BaseModel):
     webcam_rect: Optional[Dict[str, float]] = Field(default=None)
     blur_rect: Optional[Dict[str, float]] = Field(default=None)
     low_cpu_mode: bool = Field(default=False)
+    tg_auto_send: Optional[bool] = Field(default=None)
     enable_outro: bool = Field(default=False)
     outro_id: Optional[str] = Field(default=None)
     manual_timecodes: Optional[str] = Field(default=None)
@@ -177,6 +180,7 @@ class RerenderRequest(BaseModel):
     webcam_rect: Optional[Dict[str, float]] = Field(default=None)
     blur_rect: Optional[Dict[str, float]] = Field(default=None)
     low_cpu_mode: bool = Field(default=False)
+    tg_auto_send: Optional[bool] = Field(default=None)
     enable_outro: bool = Field(default=False)
     outro_id: Optional[str] = Field(default=None)
     edited_transcript: Optional[str] = Field(default=None)
@@ -203,6 +207,9 @@ class SettingsUpdateRequest(BaseModel):
     yt_cookies_browser: Optional[str] = None
     low_cpu_mode: Optional[bool] = None
     auto_clean_wav: Optional[bool] = None
+    tg_bot_token: Optional[str] = None
+    tg_chat_id: Optional[str] = None
+    tg_auto_send: Optional[bool] = None
 
 
 @app.get("/api/settings")
@@ -225,6 +232,12 @@ def api_save_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         updates["low_cpu_mode"] = bool(req.low_cpu_mode)
     if req.auto_clean_wav is not None:
         updates["auto_clean_wav"] = bool(req.auto_clean_wav)
+    if req.tg_bot_token is not None:
+        updates["tg_bot_token"] = req.tg_bot_token.strip()
+    if req.tg_chat_id is not None:
+        updates["tg_chat_id"] = req.tg_chat_id.strip()
+    if req.tg_auto_send is not None:
+        updates["tg_auto_send"] = bool(req.tg_auto_send)
     return save_settings(updates)
 
 
@@ -1096,3 +1109,56 @@ def api_system_health() -> Dict[str, Any]:
         "has_cuda": bool(hw.get("has_cuda")),
         "disk_total_mb": disk.get("total_mb", 0),
     }
+
+
+# =====================================================================
+# v2.7.0 Endpoints: Telegram Auto-Send & Manual Send + Inline Title Edit (#9)
+# =====================================================================
+
+class TelegramTestRequest(BaseModel):
+    bot_token: str
+    chat_id: str
+
+
+@app.post("/api/telegram/test")
+def api_test_telegram(req: TelegramTestRequest) -> Dict[str, Any]:
+    res = test_telegram_connection(req.bot_token, req.chat_id)
+    if res.get("ok"):
+        save_settings({"tg_bot_token": req.bot_token.strip(), "tg_chat_id": req.chat_id.strip()})
+    return res
+
+
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/send-telegram")
+def api_send_clip_telegram(job_id: str, clip_id: str) -> Dict[str, Any]:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id) or not re.fullmatch(r"[a-zA-Z0-9_-]+", clip_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор")
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Проект не найден")
+    clip = next((c for c in (job.get("clips") or []) if c.get("id") == clip_id), None)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Клип не найден")
+    cfg = load_settings()
+    token = (cfg.get("tg_bot_token") or "").strip()
+    chat_id = (cfg.get("tg_chat_id") or "").strip()
+    if not token or not chat_id:
+        raise HTTPException(status_code=400, detail="Сначала укажите Telegram Bot Token и Chat ID во вкладке «⚙️ Система»")
+    mp4 = JOBS_DIR / job_id / f"{clip_id}.mp4"
+    try:
+        return send_clip_to_telegram(token, chat_id, mp4, caption=clip.get("tiktok_caption") or clip.get("title", ""))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка отправки в Telegram: {exc}")
+
+
+class ClipTitleRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=90)
+
+
+@app.patch("/api/jobs/{job_id}/clips/{clip_id}/title")
+def api_update_clip_title(job_id: str, clip_id: str, req: ClipTitleRequest) -> Dict[str, Any]:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id) or not re.fullmatch(r"[a-zA-Z0-9_-]+", clip_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор")
+    updated = update_clip_title(job_id, clip_id, req.title)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Клип не найден")
+    return updated

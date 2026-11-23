@@ -30,6 +30,7 @@ from backend.remote import (
 )
 from backend.renderer import merge_clips_compilation, probe_video, render_clip
 from backend.studio_extras import parse_manual_timecodes
+from backend.telegram_export import send_clip_to_telegram
 from backend.transcriber import extract_audio_wav, transcribe_russian
 from backend.twitch_chat import generate_tiktok_caption
 
@@ -82,6 +83,54 @@ def delete_clip(job_id: str, clip_id: str) -> bool:
     for ext in (".mp4", ".jpg"):
         (jdir / f"{clip_id}{ext}").unlink(missing_ok=True)
     return True
+
+
+def update_clip_title(job_id: str, clip_id: str, new_title: str) -> Optional[Dict[str, Any]]:
+    """Feature #9 (v2.7): Inline edit clip title without re-rendering."""
+    clean = (new_title or "").strip()[:90]
+    if not clean:
+        return None
+    with _LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return None
+        updated = None
+        for c in job.get("clips") or []:
+            if c.get("id") == clip_id:
+                c["title"] = clean
+                c["hook_text"] = clean
+                updated = dict(c)
+                break
+        if updated is not None:
+            _save_job(job)
+    return updated
+
+
+def _auto_send_clips_to_telegram(job_id: str, rendered_clips: List[Dict[str, Any]], options: Dict[str, Any]) -> int:
+    """Auto-upload rendered clips to Telegram when tg_auto_send toggle is ON."""
+    cfg = load_settings()
+    enabled = bool(options.get("tg_auto_send") if options.get("tg_auto_send") is not None else cfg.get("tg_auto_send", False))
+    token = (cfg.get("tg_bot_token") or "").strip()
+    chat_id = (cfg.get("tg_chat_id") or "").strip()
+    if not enabled or not token or not chat_id or not rendered_clips:
+        return 0
+
+    jdir = _job_dir(job_id)
+    sent = 0
+    for idx, c in enumerate(rendered_clips, start=1):
+        if is_job_cancelled(job_id):
+            break
+        mp4 = jdir / f"{c['id']}.mp4"
+        if not mp4.exists():
+            continue
+        _update_job(job_id, progress=98, message=f"✈️ Отправка клипа {idx}/{len(rendered_clips)} в Telegram...")
+        try:
+            send_clip_to_telegram(token, chat_id, mp4, caption=c.get("tiktok_caption") or c.get("title", ""))
+            c["sent_telegram"] = True
+            sent += 1
+        except Exception as exc:
+            print(f"[telegram] auto-send clip {c['id']} failed: {exc}")
+    return sent
 
 
 def _job_dir(job_id: str) -> Path:
@@ -521,12 +570,14 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
 
             _update_job(job_id, clips=rendered_clips, words_count=total_recognized_words)
 
+        tg_sent = _auto_send_clips_to_telegram(job_id, rendered_clips, options)
+        tg_note = f" • ✈️ Отправлено в Telegram: {tg_sent}" if tg_sent > 0 else ""
         _update_job(
             job_id,
             status="completed",
             stage="completed",
             progress=100,
-            message=f"Готово! Создано {len(rendered_clips)} клипов 9:16 без скачивания всего видео.",
+            message=f"Готово! Создано {len(rendered_clips)} клипов 9:16 без скачивания всего видео.{tg_note}",
             clips=rendered_clips,
             words_count=total_recognized_words,
         )
@@ -753,13 +804,15 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
                 _update_job(job_id, clips=ordered)
 
         rendered_clips = [rendered_map[k] for k in sorted(rendered_map.keys())]
+        tg_sent = _auto_send_clips_to_telegram(job_id, rendered_clips, options)
+        tg_note = f" • ✈️ Отправлено в Telegram: {tg_sent}" if tg_sent > 0 else ""
 
         _update_job(
             job_id,
             status="completed",
             stage="completed",
             progress=100,
-            message=f"Готово! Создано {len(rendered_clips)} клипов 9:16 с субтитрами.",
+            message=f"Готово! Создано {len(rendered_clips)} клипов 9:16 с субтитрами.{tg_note}",
             clips=rendered_clips,
         )
     except Exception as exc:

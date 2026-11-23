@@ -65,6 +65,23 @@
   const btnPlayAdAudioPreview = document.getElementById('btnPlayAdAudioPreview');
   const systemHealthPills = document.getElementById('systemHealthPills');
   const btnQuickCleanCache = document.getElementById('btnQuickCleanCache');
+  const btnResetAllSettings = document.getElementById('btnResetAllSettings');
+  const bgMusicVolume = document.getElementById('bgMusicVolume');
+  const bgMusicVolumeVal = document.getElementById('bgMusicVolumeVal');
+  const watermarkOpacity = document.getElementById('watermarkOpacity');
+  const watermarkOpacityVal = document.getElementById('watermarkOpacityVal');
+  const webcamPhotoMiniThumb = document.getElementById('webcamPhotoMiniThumb');
+  const adBannerMiniThumb = document.getElementById('adBannerMiniThumb');
+  const tgAutoSendToggle = document.getElementById('tgAutoSendToggle');
+  const tgBotTokenInput = document.getElementById('tgBotTokenInput');
+  const tgChatIdInput = document.getElementById('tgChatIdInput');
+  const btnTestTelegram = document.getElementById('btnTestTelegram');
+  const tgTestStatus = document.getElementById('tgTestStatus');
+  const procEta = document.getElementById('procEta');
+  const procRetryWrap = document.getElementById('procRetryWrap');
+  const btnRetryJob = document.getElementById('btnRetryJob');
+  const btnToggleSelectAll = document.getElementById('btnToggleSelectAll');
+  const btnCopyAllCaptions = document.getElementById('btnCopyAllCaptions');
   const urlInput = document.getElementById('urlInput');
   const btnProbeUrl = document.getElementById('btnProbeUrl');
   const dropZone = document.getElementById('dropZone');
@@ -318,6 +335,15 @@
     }
     if (autoCleanWavToggle && typeof savedSettings.auto_clean_wav === 'boolean') {
       autoCleanWavToggle.checked = savedSettings.auto_clean_wav;
+    }
+    if (tgBotTokenInput && savedSettings.tg_bot_token) {
+      tgBotTokenInput.value = savedSettings.tg_bot_token;
+    }
+    if (tgChatIdInput && savedSettings.tg_chat_id) {
+      tgChatIdInput.value = savedSettings.tg_chat_id;
+    }
+    if (tgAutoSendToggle && typeof savedSettings.tg_auto_send === 'boolean') {
+      tgAutoSendToggle.checked = savedSettings.tg_auto_send;
     }
     applyHardwareInfo(cfg.hardware);
 
@@ -1426,10 +1452,10 @@
       hook_border_color: hookBorderColor ? hookBorderColor.value : '#ffe600',
       hook_font_size: hookFontSize ? hookFontSize.value : 'medium',
       watermark_text: (watermarkInput.value || '').trim() || null,
-      watermark_opacity: 0.55,
+      watermark_opacity: watermarkOpacity ? (parseInt(watermarkOpacity.value, 10) || 55) / 100.0 : 0.55,
       jump_cuts: jumpCutsToggle.checked,
       bg_music_id: bgMusicSelect.value || null,
-      bg_music_volume: 0.18,
+      bg_music_volume: bgMusicVolume ? (parseInt(bgMusicVolume.value, 10) || 18) / 100.0 : 0.18,
       target_fps: fps60Toggle && fps60Toggle.checked ? 60 : 30,
       video_enhance: !!(videoEnhanceToggle && videoEnhanceToggle.checked),
       enable_ad_banner: !!(adBannerToggle && adBannerToggle.checked),
@@ -1443,6 +1469,7 @@
       webcam_rect: state.webcamRect || null,
       blur_rect: state.blurRect || null,
       low_cpu_mode: !!(lowCpuToggle && lowCpuToggle.checked),
+      tg_auto_send: !!(tgAutoSendToggle && tgAutoSendToggle.checked),
       enable_outro: !!(outroToggle && outroToggle.checked),
       outro_id: outroSelect ? outroSelect.value || null : null,
       manual_timecodes: manualTimecodesInput ? (manualTimecodesInput.value || '').trim() || null : null,
@@ -1463,7 +1490,26 @@
       showToast('Максимальная длина должна быть больше минимальной');
       return;
     }
+    // Feature #10 (v2.7): Pre-Flight Check so user never renders in vain with missing assets!
+    if (opts.enable_ad_banner && !opts.ad_banner_id) {
+      showToast('⚠️ Включён «Рекламный баннер», но картинка/GIF не выбраны (вкладка «⚡ Эффекты»)');
+      return;
+    }
+    if (opts.enable_satisfying_video && !opts.satisfying_video_id) {
+      showToast('⚠️ Включена «Залипашка снизу», но видео не выбрано (вкладка «⚡ Эффекты»)');
+      return;
+    }
+    if (opts.enable_outro && !opts.outro_id) {
+      showToast('⚠️ Включено «Аутро», но файл не выбран (вкладка «⚡ Эффекты»)');
+      return;
+    }
+    if (opts.tg_auto_send && (!(tgBotTokenInput?.value || '').trim() || !(tgChatIdInput?.value || '').trim())) {
+      showToast('⚠️ Включена авто-выгрузка в Telegram — укажите токен бота и Chat ID во вкладке «⚙️ Система»');
+      return;
+    }
 
+    state.jobStartTime = Date.now();
+    if (procRetryWrap) procRetryWrap.classList.add('hidden');
     btnStart.disabled = true;
     if (btnShuffleMoments) btnShuffleMoments.disabled = true;
     progressSection.classList.remove('hidden');
@@ -1573,6 +1619,18 @@
     if (job.status === 'processing' || job.status === 'failed' || job.status === 'completed' || job.status === 'cancelled') {
       progressSection.classList.remove('hidden');
       if (btnCancelJob) btnCancelJob.classList.toggle('hidden', job.status !== 'processing');
+      if (procRetryWrap) procRetryWrap.classList.toggle('hidden', job.status !== 'failed');
+      if (procEta) {
+        const pct = job.progress || 0;
+        if (job.status === 'processing' && state.jobStartTime && pct >= 6 && pct < 99) {
+          const elapsed = (Date.now() - state.jobStartTime) / 1000;
+          const rem = Math.max(2, Math.round((elapsed * (100 - pct)) / pct));
+          procEta.textContent = `⏱ ~${formatDuration(rem)}`;
+          procEta.classList.remove('hidden');
+        } else {
+          procEta.classList.add('hidden');
+        }
+      }
       procTitle.textContent =
         job.status === 'completed'
           ? '✅ Нарезка завершена!'
@@ -1758,17 +1816,22 @@
     resultsMeta.textContent = `Проект: ${job.original_filename} • Клипов: ${job.clips.length} • Распознано слов: ${job.words_count || 0}${notice}`;
     selectedClipIdsForCompile.clear();
     updateCompileBtnUI();
+    state.lastRenderedJob = job;
     if (job.clips.length > 0) {
       btnDownloadAllZip.href = `/api/jobs/${job.job_id}/download-all`;
       btnDownloadAllZip.classList.remove('hidden');
       if (btnShuffleMoments) btnShuffleMoments.classList.remove('hidden');
       if (btnExportFolder) btnExportFolder.classList.remove('hidden');
       if (btnBestOf60s) btnBestOf60s.classList.remove('hidden');
+      if (btnToggleSelectAll) btnToggleSelectAll.classList.remove('hidden');
+      if (btnCopyAllCaptions) btnCopyAllCaptions.classList.remove('hidden');
     } else {
       btnDownloadAllZip.classList.add('hidden');
       if (btnShuffleMoments) btnShuffleMoments.classList.add('hidden');
       if (btnExportFolder) btnExportFolder.classList.add('hidden');
       if (btnBestOf60s) btnBestOf60s.classList.add('hidden');
+      if (btnToggleSelectAll) btnToggleSelectAll.classList.add('hidden');
+      if (btnCopyAllCaptions) btnCopyAllCaptions.classList.add('hidden');
     }
     clipsGrid.innerHTML = '';
 
@@ -1817,10 +1880,88 @@
           </div>
           <div class="clip-meta-bar">
             <span>1080×1920 • ${job.options?.target_fps || 30} FPS • ${clip.file_size_mb || '?'} МБ</span>
-            <button type="button" class="btn btn-ghost btn-sm btn-delete-clip" title="Удалить этот клип из проекта">🗑</button>
+            <div style="display:flex;gap:4px;">
+              <button type="button" class="btn btn-ghost btn-sm btn-send-tg" title="Отправить этот клип в Telegram">${clip.sent_telegram ? '✈️✅' : '✈️'}</button>
+              <button type="button" class="btn btn-ghost btn-sm btn-reveal-clip" title="Показать MP4 в папке">📂</button>
+              <button type="button" class="btn btn-ghost btn-sm btn-delete-clip" title="Удалить этот клип из проекта">🗑</button>
+            </div>
           </div>
         </div>
       `;
+
+      // #1 Single Active Video Player: pause all other clips when this clip starts playing!
+      const vidEl = card.querySelector('video');
+      if (vidEl) {
+        vidEl.addEventListener('play', () => {
+          clipsGrid.querySelectorAll('video').forEach((other) => {
+            if (other !== vidEl && !other.paused) other.pause();
+          });
+        });
+      }
+
+      // #9 Inline Title Edit directly on clip card!
+      const titleEl = card.querySelector('.clip-title');
+      if (titleEl) {
+        titleEl.contentEditable = 'true';
+        titleEl.title = 'Кликните, чтобы быстро переименовать (Enter — сохранить)';
+        titleEl.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            titleEl.blur();
+          }
+        });
+        titleEl.addEventListener('blur', async () => {
+          const nextTitle = (titleEl.textContent || '').trim();
+          if (!nextTitle || nextTitle === clip.title) return;
+          const r = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/title`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: nextTitle }),
+          });
+          if (r.ok) {
+            clip.title = nextTitle;
+            showToast('Название клипа сохранено!');
+          }
+        });
+      }
+
+      // Manual 1-click Telegram send on card
+      const btnTg = card.querySelector('.btn-send-tg');
+      if (btnTg) {
+        btnTg.addEventListener('click', async () => {
+          btnTg.disabled = true;
+          btnTg.textContent = '⏳';
+          try {
+            const r = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/send-telegram`, { method: 'POST' });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.detail || 'Ошибка отправки в Telegram');
+            clip.sent_telegram = true;
+            btnTg.textContent = '✈️✅';
+            showToast('✈️ Клип отправлен в Telegram!');
+          } catch (err) {
+            btnTg.textContent = '✈️';
+            showToast(err.message || 'Ошибка Telegram');
+          } finally {
+            btnTg.disabled = false;
+          }
+        });
+      }
+
+      // #15 Reveal MP4 file in Finder / Explorer
+      const btnRev = card.querySelector('.btn-reveal-clip');
+      if (btnRev) {
+        btnRev.addEventListener('click', async () => {
+          const r = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/path`);
+          if (!r.ok) return;
+          const p = (await r.json()).path || '';
+          if (window.tikcutDesktop && window.tikcutDesktop.openFolder && p) {
+            const dir = p.replace(/[\\/][^\\/]+$/, '');
+            window.tikcutDesktop.openFolder(dir);
+          } else {
+            showToast(`Файл: ${p}`);
+          }
+        });
+      }
 
       const btnDelClip = card.querySelector('.btn-delete-clip');
       if (btnDelClip) {
@@ -3066,6 +3207,7 @@
     if (outroToggle?.checked) effN++;
     if (bgMusicSelect?.value) effN++;
     if (state.blurRect) effN++;
+    if (tgAutoSendToggle?.checked) effN++;
     setBadge(tabBadgeEffects, effN);
 
     let sysN = 0;
@@ -3186,7 +3328,140 @@
     });
   }
 
+  // =====================================================================
+  // v2.7.0 Polish & Telegram Auto-Export Handlers (#12, #13, #14, #16, #18, #19, #20, Telegram)
+  // =====================================================================
+
+  // #12 Music Volume & #13 Watermark Opacity Sliders
+  if (bgMusicVolume && bgMusicVolumeVal) {
+    bgMusicVolume.addEventListener('input', () => {
+      bgMusicVolumeVal.textContent = `${bgMusicVolume.value}%`;
+    });
+  }
+  if (watermarkOpacity && watermarkOpacityVal) {
+    watermarkOpacity.addEventListener('input', () => {
+      watermarkOpacityVal.textContent = `${watermarkOpacity.value}%`;
+      if (previewWatermark) previewWatermark.style.opacity = String((parseInt(watermarkOpacity.value, 10) || 55) / 100);
+    });
+  }
+
+  // #14 Mini-Previews for Ad Banner & Streamer Photo
+  function syncAssetMiniThumbs() {
+    if (webcamPhotoMiniThumb && webcamPhotoSelect) {
+      if (webcamPhotoSelect.value) {
+        webcamPhotoMiniThumb.src = `/api/avatars/${encodeURIComponent(webcamPhotoSelect.value)}`;
+        webcamPhotoMiniThumb.classList.remove('hidden');
+      } else {
+        webcamPhotoMiniThumb.classList.add('hidden');
+      }
+    }
+    if (adBannerMiniThumb && adBannerSelect) {
+      if (adBannerSelect.value) {
+        adBannerMiniThumb.src = `/api/ads/${encodeURIComponent(adBannerSelect.value)}`;
+        adBannerMiniThumb.classList.remove('hidden');
+      } else {
+        adBannerMiniThumb.classList.add('hidden');
+      }
+    }
+  }
+  if (webcamPhotoSelect) webcamPhotoSelect.addEventListener('change', syncAssetMiniThumbs);
+  if (adBannerSelect) adBannerSelect.addEventListener('change', syncAssetMiniThumbs);
+
+  // #16 Copy All Captions & Hashtags
+  if (btnCopyAllCaptions) {
+    btnCopyAllCaptions.addEventListener('click', async () => {
+      const clips = (state.lastRenderedJob && state.lastRenderedJob.clips) || [];
+      if (!clips.length) return;
+      const text = clips
+        .map((c, i) => `=== #${i + 1}: ${c.title || ''} ===\n${buildCaptionForAccount(c)}`)
+        .join('\n\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast(`📋 Скопированы описания всех ${clips.length} клипов!`);
+      } catch (_) {
+        showToast('Не удалось скопировать в буфер');
+      }
+    });
+  }
+
+  // #18 Retry failed job with same settings
+  if (btnRetryJob) {
+    btnRetryJob.addEventListener('click', () => runJobProcessing(0));
+  }
+
+  // #19 Toggle Select All / Deselect All clips for compilation
+  if (btnToggleSelectAll) {
+    btnToggleSelectAll.addEventListener('click', () => {
+      const cbs = Array.from(clipsGrid.querySelectorAll('.clip-compile-cb'));
+      if (!cbs.length) return;
+      const allChecked = cbs.every((cb) => cb.checked);
+      selectedClipIdsForCompile.clear();
+      cbs.forEach((cb) => {
+        cb.checked = !allChecked;
+        if (cb.checked) selectedClipIdsForCompile.add(cb.dataset.clipId);
+      });
+      btnToggleSelectAll.textContent = allChecked ? '☑️ Выбрать все' : '⬜ Снять все';
+      updateCompileBtnUI();
+    });
+  }
+
+  // #20 Reset All Settings to Defaults
+  if (btnResetAllSettings) {
+    btnResetAllSettings.addEventListener('click', () => {
+      try { localStorage.removeItem(LS_KEY); } catch (_) {}
+      location.reload();
+    });
+  }
+
+  // ✈️ Telegram Auto-Export settings persistence & Test button
+  if (tgAutoSendToggle) {
+    tgAutoSendToggle.addEventListener('change', () => {
+      saveNetSetting({ tg_auto_send: tgAutoSendToggle.checked });
+      updateTabBadges();
+      showToast(tgAutoSendToggle.checked ? '✈️ Авто-выгрузка готовых клипов в Telegram включена!' : 'Авто-выгрузка в Telegram выключена');
+    });
+  }
+  let tgSaveTimer = null;
+  const saveTgCreds = () => {
+    clearTimeout(tgSaveTimer);
+    tgSaveTimer = setTimeout(() => {
+      saveNetSetting({
+        tg_bot_token: (tgBotTokenInput?.value || '').trim(),
+        tg_chat_id: (tgChatIdInput?.value || '').trim(),
+      });
+    }, 500);
+  };
+  if (tgBotTokenInput) tgBotTokenInput.addEventListener('input', saveTgCreds);
+  if (tgChatIdInput) tgChatIdInput.addEventListener('input', saveTgCreds);
+  if (btnTestTelegram && tgBotTokenInput && tgChatIdInput) {
+    btnTestTelegram.addEventListener('click', async () => {
+      btnTestTelegram.disabled = true;
+      btnTestTelegram.textContent = '⏳...';
+      try {
+        const res = await fetch('/api/telegram/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bot_token: tgBotTokenInput.value.trim(),
+            chat_id: tgChatIdInput.value.trim(),
+          }),
+        });
+        const data = await res.json();
+        if (tgTestStatus) {
+          tgTestStatus.textContent = data.message || (data.ok ? '✅ OK' : '❌ Ошибка');
+          tgTestStatus.className = `key-status ${data.ok ? 'ok' : 'err'}`;
+        }
+        showToast(data.message || (data.ok ? 'Telegram подключён!' : 'Ошибка Telegram'));
+      } catch (_) {
+        showToast('Ошибка сети при проверке Telegram');
+      } finally {
+        btnTestTelegram.disabled = false;
+        btnTestTelegram.textContent = '✈️ Тест';
+      }
+    });
+  }
+
   refreshOutrosList();
   loadSystemHealth();
-  init().then(() => setTimeout(restoreLastSettings, 250));
+  init().then(() => setTimeout(() => { restoreLastSettings(); syncAssetMiniThumbs(); }, 250));
 })();

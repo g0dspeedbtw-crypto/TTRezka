@@ -2175,3 +2175,28 @@ input[type="range"] {
 .history-row-wrap .history-item {
   flex: 1;
 }
+
+/* === v2.7.0: Mini Asset Previews, Inline Title Edit & Telegram === */
+.mini-asset-thumb {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid var(--border-hi);
+  background: #0d101b;
+  flex-shrink: 0;
+}
+.clip-title[contenteditable="true"] {
+  cursor: text;
+  border-radius: 6px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background 0.15s ease;
+}
+.clip-title[contenteditable="true"]:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.clip-title[contenteditable="true"]:focus {
+  outline: 1px solid var(--accent);
+  background: rgba(124, 92, 255, 0.14);
+}

@@ -281,6 +281,7 @@
             <div id="webcamPhotoRow" class="field hidden">
               <label for="webcamPhotoSelect">Фото стримера (PNG / JPG)</label>
               <div class="music-row">
+                <img id="webcamPhotoMiniThumb" class="mini-asset-thumb hidden" alt="" />
                 <select id="webcamPhotoSelect">
                   <option value="">Фото не выбрано</option>
                 </select>
@@ -432,9 +433,15 @@
             </div>
           </div>
 
-          <div class="field" style="margin-top: 12px;">
-            <label for="watermarkInput">Водяной знак канала (@ник)</label>
-            <input id="watermarkInput" type="text" placeholder="Например: @ttrezka" maxlength="36" />
+          <div class="form-grid" style="margin-top: 12px;">
+            <div class="field">
+              <label for="watermarkInput">Водяной знак канала (@ник)</label>
+              <input id="watermarkInput" type="text" placeholder="Например: @ttrezka" maxlength="36" />
+            </div>
+            <div class="field">
+              <label for="watermarkOpacity">💧 Прозрачность знака: <strong id="watermarkOpacityVal">55%</strong></label>
+              <input id="watermarkOpacity" type="range" min="20" max="100" value="55" />
+            </div>
           </div>
         </div>
 
@@ -469,6 +476,10 @@
               <span class="switch-label">🎬 Аутро (CTA в конце)</span>
               <span class="switch"><input id="outroToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
+            <label class="switch-item">
+              <span class="switch-label">✈️ Авто-выгрузка в Telegram</span>
+              <span class="switch"><input id="tgAutoSendToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
           </div>
 
           <div id="satisfyingBox" class="sub-box hidden" style="margin-bottom: 12px;">
@@ -497,6 +508,7 @@
               <div class="field">
                 <label for="adBannerSelect">Баннер или GIF (PNG / JPG / GIF)</label>
                 <div class="music-row">
+                  <img id="adBannerMiniThumb" class="mini-asset-thumb hidden" alt="" />
                   <select id="adBannerSelect">
                     <option value="">Баннер не выбран</option>
                   </select>
@@ -532,15 +544,21 @@
           </div>
 
           <div class="sub-box" style="margin-bottom: 12px;">
-            <div class="field">
-              <label for="bgMusicSelect">🎵 Фоновая музыка (авто-приглушение)</label>
-              <div class="music-row">
-                <select id="bgMusicSelect">
-                  <option value="">Без музыки</option>
-                </select>
-                <button id="btnPlayMusicPreview" type="button" class="btn btn-ghost btn-sm" title="Прослушать трек">▶</button>
-                <input id="musicFileInput" type="file" accept=".mp3,.wav,.m4a,.ogg" hidden />
-                <button id="btnUploadMusic" type="button" class="btn btn-secondary btn-sm">+ MP3</button>
+            <div class="form-grid">
+              <div class="field">
+                <label for="bgMusicSelect">🎵 Фоновая музыка (авто-приглушение)</label>
+                <div class="music-row">
+                  <select id="bgMusicSelect">
+                    <option value="">Без музыки</option>
+                  </select>
+                  <button id="btnPlayMusicPreview" type="button" class="btn btn-ghost btn-sm" title="Прослушать трек">▶</button>
+                  <input id="musicFileInput" type="file" accept=".mp3,.wav,.m4a,.ogg" hidden />
+                  <button id="btnUploadMusic" type="button" class="btn btn-secondary btn-sm">+ MP3</button>
+                </div>
+              </div>
+              <div class="field">
+                <label for="bgMusicVolume">🔊 Громкость музыки: <strong id="bgMusicVolumeVal">18%</strong></label>
+                <input id="bgMusicVolume" type="range" min="5" max="50" value="18" />
               </div>
             </div>
           </div>
@@ -612,10 +630,31 @@
             </label>
           </div>
 
+          <div class="sub-box" style="margin-bottom: 12px;">
+            <div class="pro-box-title">✈️ Авто-выгрузка готовых клипов в Telegram (бот)</div>
+            <div class="form-grid">
+              <div class="field">
+                <label for="tgBotTokenInput">Токен бота (@BotFather)</label>
+                <input id="tgBotTokenInput" type="password" placeholder="123456789:AAH..." autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="tgChatIdInput">Ваш Chat ID или @channel</label>
+                <div class="music-row">
+                  <input id="tgChatIdInput" type="text" placeholder="123456789 (узнать у @userinfobot)" autocomplete="off" />
+                  <button id="btnTestTelegram" type="button" class="btn btn-secondary btn-sm">✈️ Тест</button>
+                </div>
+              </div>
+            </div>
+            <div id="tgTestStatus" class="key-status hidden"></div>
+          </div>
+
           <div id="systemHealthBox" class="sub-box" style="margin-top: 12px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
               <div class="pro-box-title" style="margin:0;">🩺 Здоровье системы</div>
-              <button id="btnQuickCleanCache" type="button" class="btn btn-ghost btn-sm">🧹 Очистить кэш</button>
+              <div style="display:flex;gap:6px;">
+                <button id="btnQuickCleanCache" type="button" class="btn btn-ghost btn-sm">🧹 Очистить кэш</button>
+                <button id="btnResetAllSettings" type="button" class="btn btn-ghost btn-sm">🔄 Сбросить настройки</button>
+              </div>
             </div>
             <div id="systemHealthPills" class="health-pills">
               <span class="history-meta">Проверка FFmpeg, GPU и yt-dlp...</span>
@@ -699,6 +738,7 @@
           <div id="procMessage" class="proc-message">Подготовка...</div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
+          <span id="procEta" class="history-meta hidden"></span>
           <button id="btnCancelJob" type="button" class="btn btn-ghost btn-sm hidden">⏹ Остановить</button>
           <div id="procPct" class="proc-pct">0%</div>
         </div>
@@ -716,6 +756,9 @@
       </div>
 
       <div id="procError" class="error-box hidden"></div>
+      <div id="procRetryWrap" class="hidden" style="margin-top: 10px;">
+        <button id="btnRetryJob" type="button" class="btn btn-secondary btn-sm">🔁 Повторить обработку с теми же настройками</button>
+      </div>
     </section>
 
     <!-- Results Gallery -->
@@ -726,6 +769,12 @@
           <p id="resultsMeta" class="results-meta">Отобраны самые динамичные и эмоциональные моменты</p>
         </div>
         <div class="results-header-actions">
+          <button id="btnToggleSelectAll" type="button" class="btn btn-ghost btn-sm hidden">
+            ☑️ Выбрать все
+          </button>
+          <button id="btnCopyAllCaptions" type="button" class="btn btn-ghost btn-sm hidden">
+            📋 Все описания
+          </button>
           <button id="btnBestOf60s" type="button" class="btn btn-secondary hidden">
             ⚡ Best-Of 60с (крики/смех)
           </button>
