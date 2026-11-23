@@ -327,3 +327,71 @@ def auto_cleanup_old_audio(max_age_hours: int = 24) -> Dict[str, Any]:
                 except OSError:
                     pass
     return {"removed_files": removed, "freed_mb": round(freed / (1024 * 1024), 1)}
+
+
+# =====================================================================
+# Feature #5 & #8 (v3.0): Full Studio Backup/Restore (.zip) & Self-Heal
+# =====================================================================
+
+def self_heal_startup() -> int:
+    """Delete orphaned tikcut_sub_* temp directories left behind by crashes/power-loss."""
+    import tempfile
+    cleaned = 0
+    tdir = Path(tempfile.gettempdir())
+    for p in tdir.glob("tikcut_sub_*"):
+        if p.is_dir():
+            try:
+                shutil.rmtree(p, ignore_errors=True)
+                cleaned += 1
+            except Exception:
+                pass
+    return cleaned
+
+
+def create_studio_backup_zip() -> bytes:
+    """Pack accounts, settings, content plan, and all uploaded studio assets into one .zip."""
+    import io
+    import zipfile
+    from .config import DATA_DIR
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for fname in ("accounts.json", "settings.json", "content_plan.json"):
+            fp = DATA_DIR / fname
+            if fp.exists():
+                zf.write(fp, arcname=fname)
+        for dname in ("music", "avatars", "ads", "satisfying", "outros"):
+            dpath = DATA_DIR / dname
+            if dpath.exists():
+                for f in dpath.rglob("*"):
+                    if f.is_file():
+                        zf.write(f, arcname=f"{dname}/{f.name}")
+    return buf.getvalue()
+
+
+def restore_studio_backup_zip(zip_bytes: bytes) -> Dict[str, Any]:
+    """Safely restore accounts, settings, content plan, and studio assets from a backup .zip."""
+    import io
+    import zipfile
+    from .config import DATA_DIR
+
+    allowed_files = {"accounts.json", "settings.json", "content_plan.json"}
+    allowed_dirs = {"music", "avatars", "ads", "satisfying", "outros"}
+    restored = 0
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            rel = Path(info.filename)
+            if rel.is_absolute() or ".." in rel.parts:
+                continue
+            if len(rel.parts) == 1 and rel.name in allowed_files:
+                dest = DATA_DIR / rel.name
+                dest.write_bytes(zf.read(info))
+                restored += 1
+            elif len(rel.parts) == 2 and rel.parts[0] in allowed_dirs:
+                dest_dir = DATA_DIR / rel.parts[0]
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                (dest_dir / rel.name).write_bytes(zf.read(info))
+                restored += 1
+    return {"ok": True, "restored_files": restored}

@@ -59,19 +59,27 @@ from backend.pipeline import (
     start_processing,
     update_clip_title,
 )
-from backend.remote import probe_remote_url
+from backend.remote import _apply_network_opts, probe_remote_url
 from backend.renderer import extract_preview_frame, probe_video
 from backend.studio_extras import (
     add_plan_item,
     auto_cleanup_old_audio,
     cleanup_old_sources,
     cleanup_temp_cache,
+    create_studio_backup_zip,
     delete_plan_item,
     get_disk_usage_stats,
     list_plan_items,
+    restore_studio_backup_zip,
+    self_heal_startup,
     update_plan_item,
 )
-from backend.telegram_export import send_clip_to_telegram, test_telegram_connection
+from backend.telegram_export import (
+    pull_settings_from_telegram,
+    push_settings_to_telegram,
+    send_clip_to_telegram,
+    test_telegram_connection,
+)
 from backend.twitch_radar import capture_live_stream_clip, fetch_twitch_top_clips
 
 app = FastAPI(title="TikCut Studio", version="1.0.0")
@@ -84,10 +92,11 @@ app.mount("/fonts", StaticFiles(directory=str(FONTS_DIR)), name="fonts")
 @app.on_event("startup")
 def _startup() -> None:
     load_existing_jobs()
+    import threading
+    threading.Thread(target=self_heal_startup, daemon=True).start()
     # Feature #15: Auto-clean old intermediate WAV files (> 24h) on startup if enabled (default True)
     cfg = load_settings()
     if cfg.get("auto_clean_wav", True):
-        import threading
         threading.Thread(target=auto_cleanup_old_audio, args=(24,), daemon=True).start()
 
 
@@ -825,8 +834,53 @@ def api_job_preview_frame(job_id: str) -> FileResponse:
         vpath_str = job.get("video_path")
         if vpath_str and Path(vpath_str).exists():
             extract_preview_frame(Path(vpath_str), frame_jpg)
+        elif job.get("remote_url"):
+            # v3.0: Grab a REAL 16:9 in-stream frame directly from YouTube/Twitch without downloading the full VOD!
+            import subprocess
+            import urllib.request
+            import yt_dlp
+
+            remote_url = job["remote_url"]
+            dur = float((job.get("video_meta") or {}).get("duration") or 60.0)
+            at_sec = min(max(15.0, dur * 0.15), max(1.0, dur - 5.0))
+            grabbed = False
+            try:
+                ydl_opts = _apply_network_opts({
+                    "quiet": True,
+                    "no_warnings": True,
+                    "noplaylist": True,
+                    "format": "bestvideo[height<=720][ext=mp4]/best[height<=720]/best",
+                })
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(remote_url, download=False)
+                stream_url = info.get("url") if info else None
+                if stream_url:
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-ss", f"{at_sec:.1f}",
+                        "-i", stream_url,
+                        "-vframes", "1",
+                        "-vf", "scale=960:-2",
+                        "-q:v", "3",
+                        str(frame_jpg),
+                    ]
+                    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=18)
+                    if r.returncode == 0 and frame_jpg.exists() and frame_jpg.stat().st_size > 2000:
+                        grabbed = True
+            except Exception:
+                pass
+            if not grabbed:
+                thumb_url = (job.get("video_meta") or {}).get("thumbnail")
+                if thumb_url:
+                    try:
+                        urllib.request.urlretrieve(thumb_url, str(frame_jpg))
+                        grabbed = frame_jpg.exists() and frame_jpg.stat().st_size > 1000
+                    except Exception:
+                        pass
+            if not grabbed:
+                raise HTTPException(status_code=404, detail="Не удалось получить кадр из стрима")
         else:
-            raise HTTPException(status_code=404, detail="Для видео по ссылке сначала нажмите предпросмотр или используйте готовый клип")
+            raise HTTPException(status_code=404, detail="Сначала выберите видео или ссылку")
     return FileResponse(path=str(frame_jpg), media_type="image/jpeg")
 
 
@@ -1162,3 +1216,106 @@ def api_update_clip_title(job_id: str, clip_id: str, req: ClipTitleRequest) -> D
     if not updated:
         raise HTTPException(status_code=404, detail="Клип не найден")
     return updated
+
+
+# =====================================================================
+# v3.0.0 Endpoints: Full Studio Backup/Restore (#5) & Telegram Cloud Sync
+# =====================================================================
+
+@app.get("/api/backup/export")
+def api_backup_export() -> Response:
+    import datetime
+    zbytes = create_studio_backup_zip()
+    fname = f"tikcut_studio_backup_{datetime.date.today().isoformat()}.zip"
+    return Response(
+        content=zbytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.post("/api/backup/restore")
+async def api_backup_restore(file: UploadFile = File(...)) -> Dict[str, Any]:
+    raw = await file.read()
+    try:
+        return restore_studio_backup_zip(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Некорректный архив бэкапа: {exc}")
+
+
+class TelegramSyncPushRequest(BaseModel):
+    ui_preset: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/telegram/sync-push")
+def api_telegram_sync_push(req: TelegramSyncPushRequest) -> Dict[str, Any]:
+    from backend.config import DATA_DIR
+    import json
+
+    cfg = load_settings()
+    token = (cfg.get("tg_bot_token") or "").strip()
+    chat_id = (cfg.get("tg_chat_id") or "").strip()
+    if not token or not chat_id:
+        raise HTTPException(status_code=400, detail="Сначала укажите Telegram Bot Token и Chat ID")
+
+    accounts_data = []
+    acc_file = DATA_DIR / "accounts.json"
+    if acc_file.exists():
+        try:
+            accounts_data = json.loads(acc_file.read_text(encoding="utf-8"))
+        except Exception:
+            accounts_data = []
+
+    bundle = {
+        "schema": "tikcut_sync_v1",
+        "settings": cfg,
+        "accounts": accounts_data,
+        "content_plan": list_plan_items(),
+        "ui_preset": req.ui_preset or {},
+    }
+    try:
+        res = push_settings_to_telegram(token, chat_id, bundle)
+        if res.get("file_id"):
+            save_settings({"tg_last_sync_file_id": res["file_id"]})
+        return {"ok": True, "message": "☁️ Все настройки, аккаунты и контент-план выгружены в Telegram!"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/telegram/sync-pull")
+def api_telegram_sync_pull() -> Dict[str, Any]:
+    from backend.config import CONTENT_PLAN_FILE, DATA_DIR
+    import json
+
+    cfg = load_settings()
+    token = (cfg.get("tg_bot_token") or "").strip()
+    chat_id = (cfg.get("tg_chat_id") or "").strip()
+    fallback_id = (cfg.get("tg_last_sync_file_id") or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Сначала укажите Telegram Bot Token")
+
+    try:
+        bundle = pull_settings_from_telegram(token, chat_id, fallback_file_id=fallback_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка синхронизации: {exc}")
+
+    # Restore settings (preserve current tg token/chat_id if present), accounts & content plan
+    if isinstance(bundle.get("settings"), dict):
+        merged = dict(bundle["settings"])
+        if token:
+            merged["tg_bot_token"] = token
+        if chat_id:
+            merged["tg_chat_id"] = chat_id
+        save_settings(merged)
+    if isinstance(bundle.get("accounts"), list):
+        (DATA_DIR / "accounts.json").write_text(json.dumps(bundle["accounts"], ensure_ascii=False, indent=2), encoding="utf-8")
+    if isinstance(bundle.get("content_plan"), list):
+        CONTENT_PLAN_FILE.write_text(json.dumps(bundle["content_plan"], ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {
+        "ok": True,
+        "ui_preset": bundle.get("ui_preset") or {},
+        "message": "☁️ Настройки, аккаунты и контент-план успешно синхронизированы из Telegram!",
+    }

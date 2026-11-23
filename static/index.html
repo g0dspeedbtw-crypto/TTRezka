@@ -646,14 +646,21 @@
               </div>
             </div>
             <div id="tgTestStatus" class="key-status hidden"></div>
+            <div class="music-row" style="margin-top: 10px; flex-wrap: wrap;">
+              <button id="btnTgSyncPush" type="button" class="btn btn-secondary btn-sm">☁️ Выгрузить все настройки в Telegram</button>
+              <button id="btnTgSyncPull" type="button" class="btn btn-secondary btn-sm">📥 Синхронизировать из Telegram</button>
+            </div>
           </div>
 
           <div id="systemHealthBox" class="sub-box" style="margin-top: 12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
-              <div class="pro-box-title" style="margin:0;">🩺 Здоровье системы</div>
-              <div style="display:flex;gap:6px;">
-                <button id="btnQuickCleanCache" type="button" class="btn btn-ghost btn-sm">🧹 Очистить кэш</button>
-                <button id="btnResetAllSettings" type="button" class="btn btn-ghost btn-sm">🔄 Сбросить настройки</button>
+              <div class="pro-box-title" style="margin:0;">🩺 Здоровье системы и бэкап</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <a href="/api/backup/export" download class="btn btn-secondary btn-sm">💾 Бэкап (.zip)</a>
+                <input id="restoreBackupInput" type="file" accept=".zip,application/zip" hidden />
+                <button id="btnRestoreBackup" type="button" class="btn btn-secondary btn-sm">📂 Восстановить</button>
+                <button id="btnQuickCleanCache" type="button" class="btn btn-ghost btn-sm">🧹 Кэш</button>
+                <button id="btnResetAllSettings" type="button" class="btn btn-ghost btn-sm">🔄 Сброс</button>
               </div>
             </div>
             <div id="systemHealthPills" class="health-pills">

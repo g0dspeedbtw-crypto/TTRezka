@@ -82,6 +82,10 @@
   const btnRetryJob = document.getElementById('btnRetryJob');
   const btnToggleSelectAll = document.getElementById('btnToggleSelectAll');
   const btnCopyAllCaptions = document.getElementById('btnCopyAllCaptions');
+  const btnTgSyncPush = document.getElementById('btnTgSyncPush');
+  const btnTgSyncPull = document.getElementById('btnTgSyncPull');
+  const btnRestoreBackup = document.getElementById('btnRestoreBackup');
+  const restoreBackupInput = document.getElementById('restoreBackupInput');
   const urlInput = document.getElementById('urlInput');
   const btnProbeUrl = document.getElementById('btnProbeUrl');
   const dropZone = document.getElementById('dropZone');
@@ -1620,6 +1624,11 @@
       progressSection.classList.remove('hidden');
       if (btnCancelJob) btnCancelJob.classList.toggle('hidden', job.status !== 'processing');
       if (procRetryWrap) procRetryWrap.classList.toggle('hidden', job.status !== 'failed');
+      // v3.0: Sync native Dock/Taskbar progress bar (#2) + Prevent Sleep (#1)
+      if (window.tikcutDesktop && window.tikcutDesktop.setProgress) {
+        const isProc = job.status === 'processing';
+        window.tikcutDesktop.setProgress((job.progress || 0) / 100, isProc).catch(() => {});
+      }
       if (procEta) {
         const pct = job.progress || 0;
         if (job.status === 'processing' && state.jobStartTime && pct >= 6 && pct < 99) {
@@ -2666,6 +2675,15 @@
     cropImg.onload = redrawWebcamCanvas;
     cropImg.onerror = redrawWebcamCanvas;
     if (state.currentJobId) {
+      if (webcamCropCanvas) {
+        const ctx = webcamCropCanvas.getContext('2d');
+        ctx.fillStyle = '#0e1120';
+        ctx.fillRect(0, 0, webcamCropCanvas.width, webcamCropCanvas.height);
+        ctx.fillStyle = '#a7b0ce';
+        ctx.font = '15px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('⏳ Загрузка реального кадра из видео / стрима...', webcamCropCanvas.width / 2, webcamCropCanvas.height / 2);
+      }
       cropImg.src = `/api/jobs/${state.currentJobId}/preview-frame?t=${Date.now()}`;
     } else {
       redrawWebcamCanvas();
@@ -3460,6 +3478,114 @@
       }
     });
   }
+
+  // =====================================================================
+  // v3.0.0: Telegram Cloud Sync, Studio Backup Restore (#5) & Global Hotkeys (#9)
+  // =====================================================================
+
+  if (btnTgSyncPush) {
+    btnTgSyncPush.addEventListener('click', async () => {
+      btnTgSyncPush.disabled = true;
+      btnTgSyncPush.textContent = '⏳ Выгрузка...';
+      try {
+        const preset = getCurrentOptions(0);
+        delete preset.gemini_api_key;
+        const res = await fetch('/api/telegram/sync-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ui_preset: preset }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка синхронизации');
+        showToast(data.message || '☁️ Выгружено в Telegram!');
+      } catch (err) {
+        showToast(err.message || 'Ошибка выгрузки в Telegram');
+      } finally {
+        btnTgSyncPush.disabled = false;
+        btnTgSyncPush.textContent = '☁️ Выгрузить все настройки в Telegram';
+      }
+    });
+  }
+
+  if (btnTgSyncPull) {
+    btnTgSyncPull.addEventListener('click', async () => {
+      btnTgSyncPull.disabled = true;
+      btnTgSyncPull.textContent = '⏳ Загрузка...';
+      try {
+        const res = await fetch('/api/telegram/sync-pull', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки из Telegram');
+        if (data.ui_preset && Object.keys(data.ui_preset).length) {
+          applyAccountPreset({ preset: data.ui_preset });
+          try { localStorage.setItem(LS_KEY, JSON.stringify(data.ui_preset)); } catch (_) {}
+        }
+        await refreshAccounts();
+        showToast(data.message || '☁️ Синхронизировано из Telegram!');
+      } catch (err) {
+        showToast(err.message || 'Ошибка синхронизации');
+      } finally {
+        btnTgSyncPull.disabled = false;
+        btnTgSyncPull.textContent = '📥 Синхронизировать из Telegram';
+      }
+    });
+  }
+
+  if (btnRestoreBackup && restoreBackupInput) {
+    btnRestoreBackup.addEventListener('click', () => restoreBackupInput.click());
+    restoreBackupInput.addEventListener('change', async () => {
+      const f = restoreBackupInput.files && restoreBackupInput.files[0];
+      if (!f) return;
+      btnRestoreBackup.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', f);
+        const res = await fetch('/api/backup/restore', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка восстановления');
+        showToast(`📂 Восстановлено файлов: ${data.restored_files}. Перезагрузка...`);
+        setTimeout(() => location.reload(), 900);
+      } catch (err) {
+        showToast(err.message || 'Ошибка восстановления бэкапа');
+      } finally {
+        btnRestoreBackup.disabled = false;
+        restoreBackupInput.value = '';
+      }
+    });
+  }
+
+  // #9 Global Studio Hotkeys (Esc, Cmd/Ctrl+Enter, Cmd/Ctrl+H, Cmd/Ctrl+D)
+  window.addEventListener('keydown', (ev) => {
+    const tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
+    const isTyping = tag === 'input' || tag === 'textarea' || (document.activeElement && document.activeElement.isContentEditable);
+
+    if (ev.key === 'Escape') {
+      [clipEditorModal, accountModal, dashboardModal, webcamCropModal, changelogModal, updateModal, historyDrawer].forEach((el) => {
+        if (el) el.classList.add('hidden');
+      });
+      return;
+    }
+    const mod = ev.metaKey || ev.ctrlKey;
+    if (!mod) return;
+    if (ev.key === 'Enter' && !btnStart.disabled) {
+      ev.preventDefault();
+      runJobProcessing(0);
+    } else if (!isTyping && ev.key.toLowerCase() === 'h') {
+      ev.preventDefault();
+      if (historyDrawer.classList.contains('hidden')) {
+        refreshHistory();
+        historyDrawer.classList.remove('hidden');
+      } else {
+        historyDrawer.classList.add('hidden');
+      }
+    } else if (!isTyping && ev.key.toLowerCase() === 'd') {
+      ev.preventDefault();
+      if (dashboardModal && dashboardModal.classList.contains('hidden')) {
+        openDashboard();
+      } else if (dashboardModal) {
+        dashboardModal.classList.add('hidden');
+      }
+    }
+  });
 
   refreshOutrosList();
   loadSystemHealth();

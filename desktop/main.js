@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, ipcMain, session, clipboard } = require('electron');
+const { app, BrowserWindow, shell, dialog, ipcMain, session, clipboard, powerSaveBlocker, Tray, Menu, nativeImage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const { spawn } = require('child_process');
 const http = require('http');
@@ -13,6 +13,8 @@ const RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
 let mainWindow = null;
 let backendProc = null;
 let latestFallbackUrl = RELEASES_URL;
+let tray = null;
+let sleepBlockerId = null;
 
 function sendUpdateStatus(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -462,6 +464,79 @@ ipcMain.handle('tiktok:logout', async (_e, accountId) => {
   return { ok: true };
 });
 
+// v3.0.0: Prevent Sleep (#1) + Native Dock/Taskbar Progress Bar (#2) + System Tray (#3)
+ipcMain.handle('app:set-progress', (_event, { progress, active }) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const p = active ? Math.max(0.01, Math.min(1, Number(progress) || 0)) : -1;
+    mainWindow.setProgressBar(p);
+  }
+  if (active) {
+    if (sleepBlockerId === null || !powerSaveBlocker.isStarted(sleepBlockerId)) {
+      sleepBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+    }
+  } else if (sleepBlockerId !== null) {
+    if (powerSaveBlocker.isStarted(sleepBlockerId)) {
+      powerSaveBlocker.stop(sleepBlockerId);
+    }
+    sleepBlockerId = null;
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('app:minimize-to-tray', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.hide();
+  }
+  return { ok: true };
+});
+
+function setupTray() {
+  try {
+    const iconPath = path.join(__dirname, 'assets', 'icon.png');
+    if (!fs.existsSync(iconPath)) return;
+    let img = nativeImage.createFromPath(iconPath);
+    if (process.platform === 'darwin') {
+      img = img.resize({ width: 18, height: 18 });
+    }
+    tray = new Tray(img);
+    tray.setToolTip('TikCut Studio — Нарезки 9:16');
+    const menu = Menu.buildFromTemplate([
+      {
+        label: 'Открыть TikCut Studio',
+        click: () => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        },
+      },
+      {
+        label: 'Свернуть в фон (трей)',
+        click: () => {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Выход',
+        click: () => {
+          stopBackend();
+          app.quit();
+        },
+      },
+    ]);
+    tray.setContextMenu(menu);
+    tray.on('click', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isVisible()) mainWindow.focus();
+        else mainWindow.show();
+      }
+    });
+  } catch (err) {
+    console.warn('[tray] setup skipped:', err.message);
+  }
+}
+
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -511,6 +586,7 @@ async function createWindow() {
 
 app.whenReady().then(() => {
   setupAutoUpdater();
+  setupTray();
   createWindow();
 });
 
