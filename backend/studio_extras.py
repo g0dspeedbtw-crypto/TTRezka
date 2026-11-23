@@ -305,3 +305,25 @@ def cleanup_temp_cache() -> Dict[str, Any]:
         "freed_mb": round(freed / (1024 * 1024), 1),
         "stats": get_disk_usage_stats(),
     }
+
+
+def auto_cleanup_old_audio(max_age_hours: int = 24) -> Dict[str, Any]:
+    """Feature #15: Automatically remove old intermediate WAV & raw segment files older than max_age_hours."""
+    cutoff = time.time() - max(1, int(max_age_hours)) * 3600
+    freed = 0
+    removed = 0
+    if JOBS_DIR.exists():
+        for f in JOBS_DIR.rglob("*"):
+            if not f.is_file():
+                continue
+            name = f.name.lower()
+            if name in ("audio.wav", "light_audio.wav") or name.startswith("raw_seg_") or name.endswith(".tmp"):
+                try:
+                    st = f.stat()
+                    if st.st_mtime < cutoff:
+                        freed += st.st_size
+                        f.unlink(missing_ok=True)
+                        removed += 1
+                except OSError:
+                    pass
+    return {"removed_files": removed, "freed_mb": round(freed / (1024 * 1024), 1)}

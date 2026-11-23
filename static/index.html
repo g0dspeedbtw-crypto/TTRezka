@@ -86,12 +86,18 @@
           <span class="badge badge-local">Без скачивания всего видео</span>
         </div>
 
-        <div class="source-tabs" id="sourceTabs">
+        <div class="source-tabs four-source-tabs" id="sourceTabs">
           <button type="button" class="source-tab active" data-tab="url">
-            🔗 Ссылка (YouTube / Стрим)
+            🔗 Ссылка
           </button>
           <button type="button" class="source-tab" data-tab="file">
-            📁 Файл с компьютера
+            📁 Файл
+          </button>
+          <button type="button" class="source-tab" data-tab="radar">
+            🔍 Клипы Twitch
+          </button>
+          <button type="button" class="source-tab" data-tab="live">
+            🔴 Прямой эфир
           </button>
         </div>
 
@@ -148,6 +154,40 @@
             <div class="progress-track">
               <div id="uploadBar" class="progress-fill" style="width: 0%"></div>
             </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Twitch Top Clips Radar (#1) -->
+        <div id="radarPanel" class="hidden">
+          <div class="url-input-row" style="margin-bottom: 8px;">
+            <input id="radarStreamerInput" type="text" placeholder="Ник стримера Twitch (напр. buster, bratishkinoff, evelone192)" autocomplete="off" />
+            <select id="radarPeriodSelect" style="max-width: 130px;">
+              <option value="24h">За 24 часа</option>
+              <option value="7d" selected>За 7 дней</option>
+              <option value="30d">За 30 дней</option>
+            </select>
+            <button id="btnSearchTwitchClips" type="button" class="btn btn-primary btn-sm">🔍 Найти</button>
+          </div>
+          <div class="music-row" style="justify-content: space-between; margin-bottom: 8px;">
+            <span id="radarMeta" class="history-meta">Находит Топ-20 самых популярных клипов зрителей — в 1 клик в 9:16!</span>
+            <button id="btnRadarTop5Batch" type="button" class="btn btn-secondary btn-sm hidden">🚀 Топ-5 в очередь</button>
+          </div>
+          <div id="radarResultsGrid" class="radar-grid hidden"></div>
+        </div>
+
+        <!-- Tab 4: Live Stream Instant Clipper (#3) -->
+        <div id="livePanel" class="hidden">
+          <div class="url-input-row" style="margin-bottom: 8px;">
+            <input id="liveStreamUrlInput" type="url" placeholder="Ссылка на идущий стрим (https://www.twitch.tv/channel или YouTube Live)" autocomplete="off" />
+            <select id="liveDurationSelect" style="max-width: 110px;">
+              <option value="30">30 сек</option>
+              <option value="45" selected>45 сек</option>
+              <option value="60">60 сек</option>
+            </select>
+            <button id="btnCaptureLive" type="button" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #ff2e55, #ff6b35);">🔴 Поймать</button>
+          </div>
+          <div id="liveStatusText" class="url-hint">
+            Захватывает фрагмент <strong>прямо во время эфира</strong> и сразу рендерит готовый 9:16 клип с субтитрами, чтобы вы залили его первым.
           </div>
         </div>
 
@@ -564,6 +604,10 @@
               <span class="switch-label">🌡️ Тихий фон (меньше нагрузки на ПК при рендере)</span>
               <span class="switch"><input id="lowCpuToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
+            <label class="switch-item">
+              <span class="switch-label">🧹 Авто-очистка аудиодорожек (WAV старше 24ч)</span>
+              <span class="switch"><input id="autoCleanWavToggle" type="checkbox" checked /><span class="slider"></span></span>
+            </label>
           </div>
         </div>
 
@@ -682,6 +726,15 @@
             📦 Скачать все (.zip)
           </a>
         </div>
+      </div>
+
+      <!-- Visual Hype Timeline (#4) -->
+      <div id="hypeTimelineBox" class="hype-timeline-box hidden">
+        <div class="hype-timeline-head">
+          <span style="font-weight: 700; font-size: 13px;">📊 Тепловая карта хайпа стрима <span id="hypeTimelineSource" class="history-meta"></span></span>
+          <span id="hypeTimelineHint" class="history-meta">Кликните по любому красному пику, чтобы вырезать его в 1 клик</span>
+        </div>
+        <div id="hypeTimelineBars" class="hype-timeline-bars"></div>
       </div>
 
       <div id="customClipBar" class="custom-clip-bar hidden">

@@ -1402,3 +1402,77 @@ def start_batch_urls(urls: List[str], options: Dict[str, Any]) -> Dict[str, Any]
 
     threading.Thread(target=_worker, daemon=True).start()
     return get_batch_status()
+
+
+def get_job_hype_timeline(job_id: str, num_bins: int = 72) -> Dict[str, Any]:
+    """Feature #4: Build a normalized 0..1 visual hype timeline across the whole stream/video."""
+    import numpy as np
+
+    job = get_job(job_id)
+    if not job:
+        raise ValueError("Проект не найден")
+    jdir = _job_dir(job_id)
+    duration = float((job.get("video_meta") or {}).get("duration") or 0.0)
+    if duration <= 1.0:
+        return {"duration": 0.0, "bins": [], "source": "none"}
+
+    n = max(20, min(120, int(num_bins)))
+    step = duration / n
+    bins = [0.0] * n
+    sources: List[str] = []
+
+    # 1. Remote heatmap (Twitch chat explosions / YouTube most replayed)
+    rm_path = jdir / "remote_meta.json"
+    if rm_path.exists():
+        try:
+            rm = json.loads(rm_path.read_text(encoding="utf-8"))
+            hm = rm.get("heatmap") or []
+            if hm:
+                sources.append("чат/пересмотры")
+                for h in hm:
+                    hs = float(h.get("start_time", 0.0))
+                    he = float(h.get("end_time", hs + 10.0))
+                    val = float(h.get("value", 0.0))
+                    i0 = max(0, min(n - 1, int(hs / step)))
+                    i1 = max(i0, min(n - 1, int(he / step)))
+                    for i in range(i0, i1 + 1):
+                        bins[i] = max(bins[i], val)
+        except Exception:
+            pass
+
+    # 2. Acoustic audio energy (local audio.wav or remote light_audio.wav)
+    wav_p = jdir / "audio.wav"
+    if not wav_p.exists():
+        wav_p = jdir / "light_audio.wav"
+    if wav_p.exists():
+        try:
+            rms, burst, bsec = compute_audio_features(wav_p, bin_sec=0.5)
+            if len(rms) >= 4:
+                sources.append("смех/крики")
+                comb = 0.45 * (rms / (float(np.median(rms)) + 1e-6)) + 0.55 * (burst / (float(np.median(burst)) + 1e-6))
+                p96 = float(np.percentile(comb, 96)) or 1.0
+                for i in range(n):
+                    a0 = max(0, int((i * step) / bsec))
+                    a1 = min(len(comb), max(a0 + 1, int(((i + 1) * step) / bsec)))
+                    v = min(1.0, float(np.max(comb[a0:a1])) / max(p96, 1e-5))
+                    bins[i] = max(bins[i], round(v, 3)) if sources[0] != "смех/крики" else round(v, 3)
+        except Exception:
+            pass
+
+    # 3. Fallback: highlight clips scores
+    if not sources and job.get("clips"):
+        sources.append("клипы")
+        for c in job["clips"]:
+            cs = float(c.get("start", 0))
+            ce = float(c.get("end", cs + 10))
+            sc = min(1.0, max(0.2, (float(c.get("viral_score", 70)) - 40) / 60.0))
+            i0 = max(0, min(n - 1, int(cs / step)))
+            i1 = max(i0, min(n - 1, int(ce / step)))
+            for i in range(i0, i1 + 1):
+                bins[i] = max(bins[i], sc)
+
+    out_bins = [
+        {"t": round((i + 0.5) * step, 1), "value": round(min(1.0, max(0.0, bins[i])), 3)}
+        for i in range(n)
+    ]
+    return {"duration": round(duration, 2), "bins": out_bins, "source": " + ".join(sources) or "none"}

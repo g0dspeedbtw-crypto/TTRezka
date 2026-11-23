@@ -39,6 +39,22 @@
   const sourceTabs = document.getElementById('sourceTabs');
   const urlPanel = document.getElementById('urlPanel');
   const filePanel = document.getElementById('filePanel');
+  const radarPanel = document.getElementById('radarPanel');
+  const livePanel = document.getElementById('livePanel');
+  const radarStreamerInput = document.getElementById('radarStreamerInput');
+  const radarPeriodSelect = document.getElementById('radarPeriodSelect');
+  const btnSearchTwitchClips = document.getElementById('btnSearchTwitchClips');
+  const radarMeta = document.getElementById('radarMeta');
+  const btnRadarTop5Batch = document.getElementById('btnRadarTop5Batch');
+  const radarResultsGrid = document.getElementById('radarResultsGrid');
+  const liveStreamUrlInput = document.getElementById('liveStreamUrlInput');
+  const liveDurationSelect = document.getElementById('liveDurationSelect');
+  const btnCaptureLive = document.getElementById('btnCaptureLive');
+  const liveStatusText = document.getElementById('liveStatusText');
+  const hypeTimelineBox = document.getElementById('hypeTimelineBox');
+  const hypeTimelineSource = document.getElementById('hypeTimelineSource');
+  const hypeTimelineBars = document.getElementById('hypeTimelineBars');
+  const autoCleanWavToggle = document.getElementById('autoCleanWavToggle');
   const urlInput = document.getElementById('urlInput');
   const btnProbeUrl = document.getElementById('btnProbeUrl');
   const dropZone = document.getElementById('dropZone');
@@ -289,6 +305,9 @@
     }
     if (lowCpuToggle && typeof savedSettings.low_cpu_mode === 'boolean') {
       lowCpuToggle.checked = savedSettings.low_cpu_mode;
+    }
+    if (autoCleanWavToggle && typeof savedSettings.auto_clean_wav === 'boolean') {
+      autoCleanWavToggle.checked = savedSettings.auto_clean_wav;
     }
     applyHardwareInfo(cfg.hardware);
 
@@ -1033,6 +1052,8 @@
   function showUploadedJob(job) {
     urlPanel.classList.add('hidden');
     filePanel.classList.add('hidden');
+    if (radarPanel) radarPanel.classList.add('hidden');
+    if (livePanel) livePanel.classList.add('hidden');
     videoReadyBanner.classList.remove('hidden');
     readyFileName.textContent = job.original_filename;
     const m = job.video_meta || {};
@@ -1069,14 +1090,11 @@
   function switchSourceTab(tab) {
     sourceTabs.querySelectorAll('.source-tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
     videoReadyBanner.classList.add('hidden');
-    if (tab === 'url') {
-      urlPanel.classList.remove('hidden');
-      filePanel.classList.add('hidden');
-    } else {
-      urlPanel.classList.add('hidden');
-      filePanel.classList.remove('hidden');
-      dropZone.classList.remove('hidden');
-    }
+    urlPanel.classList.toggle('hidden', tab !== 'url');
+    filePanel.classList.toggle('hidden', tab !== 'file');
+    if (radarPanel) radarPanel.classList.toggle('hidden', tab !== 'radar');
+    if (livePanel) livePanel.classList.toggle('hidden', tab !== 'live');
+    if (tab === 'file') dropZone.classList.remove('hidden');
   }
 
   sourceTabs.querySelectorAll('.source-tab').forEach((btn) => {
@@ -1709,6 +1727,7 @@
   function renderClips(job) {
     resultsSection.classList.remove('hidden');
     if (customClipBar) customClipBar.classList.remove('hidden');
+    loadHypeTimeline(job.job_id);
     const notice = job.ai_notice ? ` • ⚠️ ${job.ai_notice}` : '';
     resultsMeta.textContent = `Проект: ${job.original_filename} • Клипов: ${job.clips.length} • Распознано слов: ${job.words_count || 0}${notice}`;
     selectedClipIdsForCompile.clear();
@@ -2751,6 +2770,181 @@
       } finally {
         btnBestOf60s.disabled = false;
         btnBestOf60s.textContent = origTxt;
+      }
+    });
+  }
+
+  // =====================================================================
+  // v2.5.0: Twitch Clips Radar (#1), Live Clipper (#3), Hype Timeline (#4), Auto WAV Cleaner (#15)
+  // =====================================================================
+
+  // #15 Auto WAV Cleaner setting toggle
+  if (autoCleanWavToggle) {
+    autoCleanWavToggle.addEventListener('change', () => {
+      saveNetSetting({ auto_clean_wav: autoCleanWavToggle.checked });
+      showToast(autoCleanWavToggle.checked ? '🧹 Авто-очистка WAV (>24ч) включена' : 'Авто-очистка WAV отключена');
+    });
+  }
+
+  // #4 Visual Hype Timeline
+  async function loadHypeTimeline(jobId) {
+    if (!hypeTimelineBox || !hypeTimelineBars) return;
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/hype-timeline`);
+      if (!res.ok) {
+        hypeTimelineBox.classList.add('hidden');
+        return;
+      }
+      const data = await res.json();
+      const bins = data.bins || [];
+      if (!bins.length) {
+        hypeTimelineBox.classList.add('hidden');
+        return;
+      }
+      hypeTimelineBox.classList.remove('hidden');
+      if (hypeTimelineSource) {
+        hypeTimelineSource.textContent = data.source && data.source !== 'none' ? `(${data.source})` : '';
+      }
+      hypeTimelineBars.innerHTML = '';
+      const totalDur = data.duration || 0;
+      bins.forEach((b) => {
+        const val = Math.max(0.06, Math.min(1, b.value || 0));
+        const bar = document.createElement('div');
+        bar.className = 'hype-bar';
+        bar.style.height = `${Math.round(val * 100)}%`;
+        bar.style.background =
+          val >= 0.72 ? '#ff3b5c' : val >= 0.45 ? '#ffb800' : 'rgba(124, 92, 255, 0.55)';
+        bar.title = `${formatDuration(b.t)} — хайп ${Math.round(val * 100)}% (клик = вырезать)`;
+        bar.addEventListener('click', () => {
+          const s = Math.max(0, b.t - 18);
+          const e = Math.min(totalDur || (b.t + 14), s + 32);
+          if (customStartInput) customStartInput.value = formatDuration(s);
+          if (customEndInput) customEndInput.value = formatDuration(e);
+          showToast(`Выбран пик ${formatDuration(s)} – ${formatDuration(e)}. Нажмите «Вырезать 9:16»!`);
+        });
+        hypeTimelineBars.appendChild(bar);
+      });
+    } catch (_) {
+      hypeTimelineBox.classList.add('hidden');
+    }
+  }
+
+  // #1 Twitch Top Clips Radar
+  let lastRadarClips = [];
+  if (btnSearchTwitchClips && radarStreamerInput) {
+    const runRadarSearch = async () => {
+      const streamer = (radarStreamerInput.value || '').trim();
+      if (!streamer) return showToast('Введите ник стримера Twitch (латиницей)');
+      btnSearchTwitchClips.disabled = true;
+      btnSearchTwitchClips.textContent = '⏳...';
+      try {
+        const res = await fetch('/api/twitch-clips/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            streamer,
+            period: radarPeriodSelect ? radarPeriodSelect.value : '7d',
+            limit: 20,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Не удалось загрузить клипы');
+        lastRadarClips = data.clips || [];
+        if (radarMeta) {
+          radarMeta.textContent = lastRadarClips.length
+            ? `Найдено ${lastRadarClips.length} топ-клипов канала ${lastRadarClips[0].streamer}`
+            : 'За выбранный период клипов не найдено';
+        }
+        if (btnRadarTop5Batch) btnRadarTop5Batch.classList.toggle('hidden', lastRadarClips.length < 2);
+        if (radarResultsGrid) {
+          radarResultsGrid.classList.toggle('hidden', !lastRadarClips.length);
+          radarResultsGrid.innerHTML = lastRadarClips.map((c, idx) => `
+            <div class="radar-card">
+              ${c.thumbnail ? `<img src="${escapeHtml(c.thumbnail)}" alt="" loading="lazy" />` : ''}
+              <div class="radar-card-body">
+                <div class="radar-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
+                <div class="radar-meta">👁 ${Number(c.views || 0).toLocaleString('ru-RU')} • ⏱ ${c.duration}с ${c.game ? '• ' + escapeHtml(c.game) : ''}</div>
+                <button type="button" class="btn btn-primary btn-sm btn-radar-pick" data-idx="${idx}" style="margin-top:auto;">⚡ В 9:16</button>
+              </div>
+            </div>
+          `).join('');
+          radarResultsGrid.querySelectorAll('.btn-radar-pick').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+              const clip = lastRadarClips[Number(btn.dataset.idx)];
+              if (!clip) return;
+              switchSourceTab('url');
+              urlInput.value = clip.url;
+              await probeUrl();
+            });
+          });
+        }
+      } catch (err) {
+        showToast(err.message || 'Ошибка радара Twitch');
+      } finally {
+        btnSearchTwitchClips.disabled = false;
+        btnSearchTwitchClips.textContent = '🔍 Найти';
+      }
+    };
+    btnSearchTwitchClips.addEventListener('click', runRadarSearch);
+    radarStreamerInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') runRadarSearch();
+    });
+  }
+
+  if (btnRadarTop5Batch) {
+    btnRadarTop5Batch.addEventListener('click', async () => {
+      const top5 = lastRadarClips.slice(0, 5).map((c) => c.url);
+      if (!top5.length) return;
+      btnRadarTop5Batch.disabled = true;
+      try {
+        const res = await fetch('/api/batch-urls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: top5, options: { ...getCurrentOptions(0), clip_count: 1 } }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка запуска очереди');
+        switchSourceTab('url');
+        if (batchQueueBox) batchQueueBox.classList.remove('hidden');
+        renderBatchStatus(data);
+        pollBatchStatus();
+        showToast('🚀 Топ-5 клипов Twitch отправлены в очередь нарезки!');
+      } catch (err) {
+        showToast(err.message || 'Ошибка очереди');
+      } finally {
+        btnRadarTop5Batch.disabled = false;
+      }
+    });
+  }
+
+  // #3 Live Stream Instant Clipper
+  if (btnCaptureLive && liveStreamUrlInput) {
+    btnCaptureLive.addEventListener('click', async () => {
+      const url = (liveStreamUrlInput.value || '').trim();
+      if (!url) return showToast('Вставьте ссылку на идущий стрим');
+      const dur = parseInt(liveDurationSelect ? liveDurationSelect.value : '45', 10) || 45;
+      btnCaptureLive.disabled = true;
+      btnCaptureLive.textContent = `🔴 Запись ${dur}с...`;
+      if (liveStatusText) liveStatusText.textContent = `Захват ${dur} сек прямого эфира... Пожалуйста, подождите.`;
+      try {
+        const res = await fetch('/api/live-clip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, duration_sec: dur, options: getCurrentOptions(0) }),
+        });
+        const job = await res.json();
+        if (!res.ok) throw new Error(job.detail || 'Не удалось захватить эфир');
+        state.currentJobId = job.job_id;
+        showUploadedJob(job);
+        progressSection.classList.remove('hidden');
+        startPolling(job.job_id);
+        showToast('🔴 Фрагмент эфира захвачен! Идёт распознавание и рендер 9:16...');
+      } catch (err) {
+        showToast(err.message || 'Ошибка захвата эфира');
+        if (liveStatusText) liveStatusText.textContent = err.message || 'Ошибка захвата эфира';
+      } finally {
+        btnCaptureLive.disabled = false;
+        btnCaptureLive.textContent = '🔴 Поймать';
       }
     });
   }

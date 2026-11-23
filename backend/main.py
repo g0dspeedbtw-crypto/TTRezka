@@ -46,6 +46,7 @@ from backend.pipeline import (
     export_job_to_account_folder,
     get_batch_status,
     get_job,
+    get_job_hype_timeline,
     get_studio_dashboard_stats,
     list_jobs,
     load_existing_jobs,
@@ -58,6 +59,7 @@ from backend.remote import probe_remote_url
 from backend.renderer import extract_preview_frame, probe_video
 from backend.studio_extras import (
     add_plan_item,
+    auto_cleanup_old_audio,
     cleanup_old_sources,
     cleanup_temp_cache,
     delete_plan_item,
@@ -65,6 +67,7 @@ from backend.studio_extras import (
     list_plan_items,
     update_plan_item,
 )
+from backend.twitch_radar import capture_live_stream_clip, fetch_twitch_top_clips
 
 app = FastAPI(title="TikCut Studio", version="1.0.0")
 
@@ -76,6 +79,11 @@ app.mount("/fonts", StaticFiles(directory=str(FONTS_DIR)), name="fonts")
 @app.on_event("startup")
 def _startup() -> None:
     load_existing_jobs()
+    # Feature #15: Auto-clean old intermediate WAV files (> 24h) on startup if enabled (default True)
+    cfg = load_settings()
+    if cfg.get("auto_clean_wav", True):
+        import threading
+        threading.Thread(target=auto_cleanup_old_audio, args=(24,), daemon=True).start()
 
 
 class ProcessRequest(BaseModel):
@@ -191,6 +199,7 @@ class SettingsUpdateRequest(BaseModel):
     yt_proxy: Optional[str] = None
     yt_cookies_browser: Optional[str] = None
     low_cpu_mode: Optional[bool] = None
+    auto_clean_wav: Optional[bool] = None
 
 
 @app.get("/api/settings")
@@ -211,6 +220,8 @@ def api_save_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         updates["yt_cookies_browser"] = req.yt_cookies_browser.strip().lower()
     if req.low_cpu_mode is not None:
         updates["low_cpu_mode"] = bool(req.low_cpu_mode)
+    if req.auto_clean_wav is not None:
+        updates["auto_clean_wav"] = bool(req.auto_clean_wav)
     return save_settings(updates)
 
 
@@ -956,3 +967,61 @@ def api_export_dashboard_csv() -> Response:
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="tikcut_studio_report.csv"'},
     )
+
+
+# =====================================================================
+# v2.5.0 Endpoints: Twitch Clips Radar (#1), Live Stream Clipper (#3),
+# Visual Hype Timeline (#4)
+# =====================================================================
+
+class TwitchClipsSearchRequest(BaseModel):
+    streamer: str
+    period: str = Field(default="7d")
+    limit: int = Field(default=20, ge=1, le=30)
+
+
+@app.post("/api/twitch-clips/search")
+def api_twitch_clips_search(req: TwitchClipsSearchRequest) -> Dict[str, Any]:
+    try:
+        clips = fetch_twitch_top_clips(req.streamer, period=req.period, limit=req.limit)
+        return {"clips": clips, "count": len(clips)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка радара Twitch: {exc}")
+
+
+class LiveClipRequest(BaseModel):
+    url: str
+    duration_sec: int = Field(default=45, ge=10, le=90)
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/live-clip")
+def api_capture_live_clip(req: LiveClipRequest) -> Dict[str, Any]:
+    try:
+        job_id = f"live_{uuid.uuid4().hex[:8]}"
+        dest = UPLOADS_DIR / f"{job_id}.mp4"
+        info = capture_live_stream_clip(req.url, dest, duration_sec=req.duration_sec)
+        meta = probe_video(dest)
+        job = create_job(job_id=job_id, original_filename=f"🔴 LIVE: {info['title']}", video_path=dest, video_meta=meta)
+        opts = dict(req.options or {})
+        opts["clip_count"] = 1
+        opts["min_duration"] = min(15.0, max(8.0, float(meta.get("duration") or 30) - 2.0))
+        opts["max_duration"] = float(meta.get("duration") or 60) + 2.0
+        start_processing(job_id, opts)
+        return job
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка захвата эфира: {exc}")
+
+
+@app.get("/api/jobs/{job_id}/hype-timeline")
+def api_job_hype_timeline(job_id: str) -> Dict[str, Any]:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор")
+    try:
+        return get_job_hype_timeline(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
