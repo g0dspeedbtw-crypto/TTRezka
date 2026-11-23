@@ -55,6 +55,16 @@
   const hypeTimelineSource = document.getElementById('hypeTimelineSource');
   const hypeTimelineBars = document.getElementById('hypeTimelineBars');
   const autoCleanWavToggle = document.getElementById('autoCleanWavToggle');
+  const previewRealFrame = document.getElementById('previewRealFrame');
+  const tabBadgeStyle = document.getElementById('tabBadgeStyle');
+  const tabBadgeEffects = document.getElementById('tabBadgeEffects');
+  const tabBadgeSystem = document.getElementById('tabBadgeSystem');
+  const btnCancelJob = document.getElementById('btnCancelJob');
+  const historySearchInput = document.getElementById('historySearchInput');
+  const btnPlayMusicPreview = document.getElementById('btnPlayMusicPreview');
+  const btnPlayAdAudioPreview = document.getElementById('btnPlayAdAudioPreview');
+  const systemHealthPills = document.getElementById('systemHealthPills');
+  const btnQuickCleanCache = document.getElementById('btnQuickCleanCache');
   const urlInput = document.getElementById('urlInput');
   const btnProbeUrl = document.getElementById('btnProbeUrl');
   const dropZone = document.getElementById('dropZone');
@@ -1085,6 +1095,18 @@
       });
     }
     btnStart.disabled = job.status === 'processing';
+    // Feature #1 (v2.6): Show real video frame inside the 9:16 Live Phone Preview!
+    if (previewRealFrame) {
+      const thumb = job.video_meta && job.video_meta.thumbnail;
+      if (job.source_type === 'remote' && thumb) {
+        previewRealFrame.src = thumb;
+        previewRealFrame.classList.remove('hidden');
+      } else if (job.job_id) {
+        previewRealFrame.onload = () => previewRealFrame.classList.remove('hidden');
+        previewRealFrame.onerror = () => previewRealFrame.classList.add('hidden');
+        previewRealFrame.src = `/api/jobs/${job.job_id}/preview-frame?t=${Date.now()}`;
+      }
+    }
   }
 
   function switchSourceTab(tab) {
@@ -1530,10 +1552,11 @@
       if (!res.ok) return;
       const job = await res.json();
       updateJobUI(job);
-      if (job.status === 'completed' || job.status === 'failed') {
+      if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
         clearInterval(state.pollTimer);
         btnStart.disabled = false;
         if (btnShuffleMoments) btnShuffleMoments.disabled = false;
+        if (btnCancelJob) btnCancelJob.classList.add('hidden');
         refreshHistory();
         if (job.status === 'completed') {
           notifyRenderDone('TikCut Studio — Нарезки готовы!', `Создано клипов: ${(job.clips || []).length}`);
@@ -1547,11 +1570,14 @@
   function updateJobUI(job) {
     const stageIdx = STAGE_ORDER.indexOf(job.stage);
 
-    if (job.status === 'processing' || job.status === 'failed' || job.status === 'completed') {
+    if (job.status === 'processing' || job.status === 'failed' || job.status === 'completed' || job.status === 'cancelled') {
       progressSection.classList.remove('hidden');
+      if (btnCancelJob) btnCancelJob.classList.toggle('hidden', job.status !== 'processing');
       procTitle.textContent =
         job.status === 'completed'
           ? '✅ Нарезка завершена!'
+          : job.status === 'cancelled'
+          ? '⏹ Обработка остановлена'
           : job.status === 'failed'
           ? '⚠️ Ошибка обработки'
           : '⚙️ Идёт локальная обработка...';
@@ -1789,8 +1815,24 @@
             <button type="button" class="btn btn-ghost btn-sm btn-copy-cap">📋 Описание</button>
             <button type="button" class="btn btn-ghost btn-sm btn-add-plan btn-full">📅 Добавить в контент-план</button>
           </div>
+          <div class="clip-meta-bar">
+            <span>1080×1920 • ${job.options?.target_fps || 30} FPS • ${clip.file_size_mb || '?'} МБ</span>
+            <button type="button" class="btn btn-ghost btn-sm btn-delete-clip" title="Удалить этот клип из проекта">🗑</button>
+          </div>
         </div>
       `;
+
+      const btnDelClip = card.querySelector('.btn-delete-clip');
+      if (btnDelClip) {
+        btnDelClip.addEventListener('click', async () => {
+          const res = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}`, { method: 'DELETE' });
+          if (res.ok) {
+            card.remove();
+            job.clips = (job.clips || []).filter((c) => c.id !== clip.id);
+            showToast('Клип удалён из проекта');
+          }
+        });
+      }
 
       const btnPlan = card.querySelector('.btn-add-plan');
       if (btnPlan) {
@@ -1960,20 +2002,23 @@
       .replace(/"/g, '&quot;');
   }
 
-  // History drawer
-  async function refreshHistory() {
-    const res = await fetch('/api/jobs');
-    const data = await res.json();
-    const jobs = data.jobs || [];
-    historyCount.textContent = String(jobs.length);
+  // History drawer with live search (#5) & project delete (#5)
+  let cachedHistoryJobs = [];
+  function renderHistoryItems(filterText = '') {
+    const q = (filterText || '').trim().toLowerCase();
+    const filtered = q
+      ? cachedHistoryJobs.filter((j) => (j.original_filename || '').toLowerCase().includes(q))
+      : cachedHistoryJobs;
     historyList.innerHTML = '';
 
-    if (jobs.length === 0) {
-      historyList.innerHTML = '<div class="history-meta">Пока нет загруженных видео.</div>';
+    if (filtered.length === 0) {
+      historyList.innerHTML = `<div class="history-meta">${q ? 'Ничего не найдено.' : 'Пока нет загруженных видео.'}</div>`;
       return;
     }
 
-    jobs.forEach((j) => {
+    filtered.forEach((j) => {
+      const row = document.createElement('div');
+      row.className = 'history-row-wrap';
       const item = document.createElement('div');
       item.className = 'history-item';
       const statusLabel =
@@ -1981,6 +2026,8 @@
           ? `✅ Готово (${(j.clips || []).length} клипов)`
           : j.status === 'processing'
           ? `⚙️ В работе (${j.progress || 0}%)`
+          : j.status === 'cancelled'
+          ? '⏹ Остановлено'
           : j.status === 'failed'
           ? '⚠️ Ошибка'
           : '📁 Загружено';
@@ -1996,8 +2043,36 @@
         if (j.status === 'processing') startPolling(j.job_id);
         historyDrawer.classList.add('hidden');
       });
-      historyList.appendChild(item);
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'btn btn-ghost btn-sm';
+      delBtn.title = 'Удалить проект и освободить место';
+      delBtn.textContent = '🗑';
+      delBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        await fetch(`/api/jobs/${j.job_id}`, { method: 'DELETE' });
+        cachedHistoryJobs = cachedHistoryJobs.filter((x) => x.job_id !== j.job_id);
+        historyCount.textContent = String(cachedHistoryJobs.length);
+        renderHistoryItems(historySearchInput ? historySearchInput.value : '');
+        showToast('Проект удалён');
+      });
+
+      row.appendChild(item);
+      row.appendChild(delBtn);
+      historyList.appendChild(row);
     });
+  }
+
+  async function refreshHistory() {
+    const res = await fetch('/api/jobs');
+    const data = await res.json();
+    cachedHistoryJobs = data.jobs || [];
+    historyCount.textContent = String(cachedHistoryJobs.length);
+    renderHistoryItems(historySearchInput ? historySearchInput.value : '');
+  }
+  if (historySearchInput) {
+    historySearchInput.addEventListener('input', () => renderHistoryItems(historySearchInput.value));
   }
 
   btnHistory.addEventListener('click', () => {
@@ -2962,6 +3037,156 @@
     });
   }
 
+  // =====================================================================
+  // v2.6.0 Polish: Tab Badges (#2), Cancel Job (#3), Auto-Save Settings (#4),
+  // Audio Preview (#6), System Health Panel (#8)
+  // =====================================================================
+
+  // #2 Live Active Feature Counters on Studio Tabs
+  function updateTabBadges() {
+    const setBadge = (el, n) => {
+      if (!el) return;
+      el.textContent = String(n);
+      el.classList.toggle('hidden', n <= 0);
+    };
+    let styleN = 0;
+    if (enableSubtitlesToggle?.checked) styleN++;
+    if (hookBannerToggle?.checked) styleN++;
+    if (autoCoverToggle?.checked) styleN++;
+    if ((watermarkInput?.value || '').trim()) styleN++;
+    setBadge(tabBadgeStyle, styleN);
+
+    let effN = 0;
+    if (jumpCutsToggle?.checked) effN++;
+    if (fps60Toggle?.checked) effN++;
+    if (videoEnhanceToggle?.checked) effN++;
+    if (uniquifyToggle?.checked) effN++;
+    if (satisfyingToggle?.checked) effN++;
+    if (adBannerToggle?.checked) effN++;
+    if (outroToggle?.checked) effN++;
+    if (bgMusicSelect?.value) effN++;
+    if (state.blurRect) effN++;
+    setBadge(tabBadgeEffects, effN);
+
+    let sysN = 0;
+    if (lowCpuToggle?.checked) sysN++;
+    if (ytCookiesSelect?.value || (ytProxyInput?.value || '').trim()) sysN++;
+    setBadge(tabBadgeSystem, sysN);
+  }
+
+  // #4 Auto-remember last studio settings across app restarts (localStorage)
+  const LS_KEY = 'tikcut_last_settings_v1';
+  let lsSaveTimer = null;
+  function scheduleSaveLastSettings() {
+    updateTabBadges();
+    clearTimeout(lsSaveTimer);
+    lsSaveTimer = setTimeout(() => {
+      try {
+        const opts = getCurrentOptions(0);
+        delete opts.gemini_api_key;
+        localStorage.setItem(LS_KEY, JSON.stringify(opts));
+      } catch (_) {}
+    }, 350);
+  }
+  function restoreLastSettings() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          applyAccountPreset({ preset: parsed });
+        }
+      }
+    } catch (_) {}
+    updateTabBadges();
+  }
+  document.querySelector('.panel-settings')?.addEventListener('change', scheduleSaveLastSettings);
+  document.querySelector('.panel-settings')?.addEventListener('input', scheduleSaveLastSettings);
+
+  // #3 Cancel / Stop Processing button
+  if (btnCancelJob) {
+    btnCancelJob.addEventListener('click', async () => {
+      if (!state.currentJobId) return;
+      btnCancelJob.disabled = true;
+      btnCancelJob.textContent = '⏳ Остановка...';
+      try {
+        await fetch(`/api/jobs/${state.currentJobId}/cancel`, { method: 'POST' });
+        showToast('⏹ Запрос на остановку отправлен');
+      } finally {
+        btnCancelJob.disabled = false;
+        btnCancelJob.textContent = '⏹ Остановить';
+      }
+    });
+  }
+
+  // #6 Quick Audio Preview Player for Background Music & Ad Voiceover
+  let previewAudioEl = null;
+  let activePreviewBtn = null;
+  function toggleAudioPreview(url, btn) {
+    if (previewAudioEl && activePreviewBtn === btn) {
+      previewAudioEl.pause();
+      previewAudioEl = null;
+      btn.textContent = '▶';
+      activePreviewBtn = null;
+      return;
+    }
+    if (previewAudioEl) {
+      previewAudioEl.pause();
+      if (activePreviewBtn) activePreviewBtn.textContent = '▶';
+    }
+    previewAudioEl = new Audio(url);
+    activePreviewBtn = btn;
+    btn.textContent = '⏹';
+    previewAudioEl.play().catch(() => {
+      showToast('Не удалось воспроизвести аудио');
+      btn.textContent = '▶';
+      activePreviewBtn = null;
+    });
+    previewAudioEl.onended = () => {
+      btn.textContent = '▶';
+      activePreviewBtn = null;
+      previewAudioEl = null;
+    };
+  }
+  if (btnPlayMusicPreview && bgMusicSelect) {
+    btnPlayMusicPreview.addEventListener('click', () => {
+      if (!bgMusicSelect.value) return showToast('Сначала выберите трек');
+      toggleAudioPreview(`/api/music/${encodeURIComponent(bgMusicSelect.value)}`, btnPlayMusicPreview);
+    });
+  }
+  if (btnPlayAdAudioPreview && adAudioSelect) {
+    btnPlayAdAudioPreview.addEventListener('click', () => {
+      if (!adAudioSelect.value) return showToast('Сначала выберите файл озвучки');
+      toggleAudioPreview(`/api/ads/${encodeURIComponent(adAudioSelect.value)}`, btnPlayAdAudioPreview);
+    });
+  }
+
+  // #8 System Health Diagnostics Panel
+  async function loadSystemHealth() {
+    if (!systemHealthPills) return;
+    try {
+      const res = await fetch('/api/system-health');
+      const h = await res.json();
+      const encLabel = h.has_nvenc ? '⚡ NVIDIA NVENC' : h.has_videotoolbox ? '⚡ Apple VideoToolbox' : 'CPU x264';
+      systemHealthPills.innerHTML = `
+        <span class="health-pill ${h.ffmpeg_ok ? '' : 'warn'}">${h.ffmpeg_ok ? '✅' : '⚠️'} ${escapeHtml(h.ffmpeg_version || 'FFmpeg')}</span>
+        <span class="health-pill">${encLabel} (${escapeHtml(h.gpu_name)})</span>
+        <span class="health-pill">yt-dlp ${escapeHtml(h.ytdlp_version)}</span>
+        <span class="health-pill">💾 Диск: ${h.disk_total_mb} МБ</span>
+      `;
+    } catch (_) {
+      systemHealthPills.innerHTML = '<span class="history-meta">Не удалось проверить систему</span>';
+    }
+  }
+  if (btnQuickCleanCache) {
+    btnQuickCleanCache.addEventListener('click', async () => {
+      const r = await (await fetch('/api/disk/cleanup-cache', { method: 'POST' })).json();
+      showToast(`🧹 Кэш очищен: освобождено ${r.freed_mb} МБ`);
+      loadSystemHealth();
+    });
+  }
+
   refreshOutrosList();
-  init();
+  loadSystemHealth();
+  init().then(() => setTimeout(restoreLastSettings, 250));
 })();

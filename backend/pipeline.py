@@ -35,6 +35,53 @@ from backend.twitch_chat import generate_tiktok_caption
 
 _LOCK = threading.Lock()
 _JOBS: Dict[str, Dict[str, Any]] = {}
+_CANCELLED_JOBS = set()
+
+
+def cancel_job(job_id: str) -> bool:
+    """Feature #3 (v2.6): Signal a running job to stop cleanly."""
+    with _LOCK:
+        if job_id not in _JOBS:
+            return False
+        _CANCELLED_JOBS.add(job_id)
+        if _JOBS[job_id].get("status") == "processing":
+            _JOBS[job_id]["message"] = "⏹ Остановка обработки..."
+            _save_job(_JOBS[job_id])
+    return True
+
+
+def is_job_cancelled(job_id: str) -> bool:
+    with _LOCK:
+        return job_id in _CANCELLED_JOBS
+
+
+def delete_job(job_id: str) -> bool:
+    """Feature #5 (v2.6): Permanently delete a project and its files."""
+    with _LOCK:
+        _CANCELLED_JOBS.add(job_id)
+        job = _JOBS.pop(job_id, None)
+    jdir = JOBS_DIR / job_id
+    if jdir.exists():
+        shutil.rmtree(jdir, ignore_errors=True)
+    return job is not None or not jdir.exists()
+
+
+def delete_clip(job_id: str, clip_id: str) -> bool:
+    """Feature #5 (v2.6): Delete a single weak clip from a project."""
+    with _LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return False
+        clips = job.get("clips") or []
+        new_clips = [c for c in clips if c.get("id") != clip_id]
+        if len(new_clips) == len(clips):
+            return False
+        job["clips"] = new_clips
+        _save_job(job)
+    jdir = JOBS_DIR / job_id
+    for ext in (".mp4", ".jpg"):
+        (jdir / f"{clip_id}{ext}").unlink(missing_ok=True)
+    return True
 
 
 def _job_dir(job_id: str) -> Path:
@@ -253,6 +300,8 @@ def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str
 
 def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
     try:
+        with _LOCK:
+            _CANCELLED_JOBS.discard(job_id)
         job = get_job(job_id)
         if not job:
             return
@@ -386,6 +435,9 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         total_recognized_words = len(words)
 
         for idx, hl in enumerate(highlights):
+            if is_job_cancelled(job_id):
+                _update_job(job_id, status="cancelled", stage="cancelled", message="⏹ Обработка остановлена пользователем.", clips=rendered_clips)
+                return
             clip_id = hl["id"]
             base_pct = 40 + (idx / n_total) * 58
             step_span = 58 / n_total
@@ -491,6 +543,8 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
 
 def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
     try:
+        with _LOCK:
+            _CANCELLED_JOBS.discard(job_id)
         job = get_job(job_id)
         if not job:
             return

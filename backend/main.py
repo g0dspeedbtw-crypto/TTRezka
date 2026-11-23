@@ -39,10 +39,13 @@ from backend.config import (
 from backend.gemini_client import clean_api_key, test_gemini_key
 from backend.hardware import get_hardware_info
 from backend.pipeline import (
+    cancel_job,
     create_best_of_60s_clip,
     create_compilation_clip,
     create_custom_clip,
     create_job,
+    delete_clip,
+    delete_job,
     export_job_to_account_folder,
     get_batch_status,
     get_job,
@@ -1025,3 +1028,71 @@ def api_job_hype_timeline(job_id: str) -> Dict[str, Any]:
         return get_job_hype_timeline(job_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+# =====================================================================
+# v2.6.0 Polish Endpoints: Cancel (#3), Delete Job/Clip (#5),
+# Music Preview (#6), System Health (#8)
+# =====================================================================
+
+@app.post("/api/jobs/{job_id}/cancel")
+def api_cancel_job(job_id: str) -> Dict[str, Any]:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор")
+    if not cancel_job(job_id):
+        raise HTTPException(status_code=404, detail="Проект не найден")
+    return {"ok": True}
+
+
+@app.delete("/api/jobs/{job_id}")
+def api_delete_job(job_id: str) -> Dict[str, Any]:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор")
+    delete_job(job_id)
+    return {"ok": True}
+
+
+@app.delete("/api/jobs/{job_id}/clips/{clip_id}")
+def api_delete_clip(job_id: str, clip_id: str) -> Dict[str, Any]:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id) or not re.fullmatch(r"[a-zA-Z0-9_-]+", clip_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор")
+    if not delete_clip(job_id, clip_id):
+        raise HTTPException(status_code=404, detail="Клип не найден")
+    return {"ok": True}
+
+
+@app.get("/api/music/{filename}")
+def api_get_music_file(filename: str) -> FileResponse:
+    safe_name = Path(filename).name
+    p = MUSIC_DIR / safe_name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Трек не найден")
+    return FileResponse(path=str(p))
+
+
+@app.get("/api/system-health")
+def api_system_health() -> Dict[str, Any]:
+    import subprocess
+    import yt_dlp
+
+    hw = get_hardware_info()
+    disk = get_disk_usage_stats()
+    ff_ver = "Не найден"
+    ff_ok = False
+    try:
+        r = subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=4)
+        if r.returncode == 0 and r.stdout:
+            ff_ok = True
+            ff_ver = r.stdout.splitlines()[0].split("Copyright")[0].strip()[:42]
+    except Exception:
+        pass
+    return {
+        "ffmpeg_ok": ff_ok,
+        "ffmpeg_version": ff_ver,
+        "ytdlp_version": getattr(yt_dlp.version, "__version__", "unknown"),
+        "gpu_name": hw.get("gpu_name") or "CPU",
+        "has_nvenc": bool(hw.get("has_nvenc")),
+        "has_videotoolbox": bool(hw.get("has_videotoolbox")),
+        "has_cuda": bool(hw.get("has_cuda")),
+        "disk_total_mb": disk.get("total_mb", 0),
+    }

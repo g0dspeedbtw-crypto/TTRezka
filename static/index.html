@@ -215,9 +215,9 @@
         <!-- Clean 4-Tab Studio Settings Navigation -->
         <div class="studio-tabs" id="studioTabs">
           <button type="button" class="studio-tab active" data-stab="main">🎬 Основное</button>
-          <button type="button" class="studio-tab" data-stab="style">💬 Титры и стиль</button>
-          <button type="button" class="studio-tab" data-stab="effects">⚡ Эффекты и реклама</button>
-          <button type="button" class="studio-tab" data-stab="system">⚙️ ИИ и система</button>
+          <button type="button" class="studio-tab" data-stab="style">💬 Титры <span class="tab-badge hidden" id="tabBadgeStyle"></span></button>
+          <button type="button" class="studio-tab" data-stab="effects">⚡ Эффекты <span class="tab-badge hidden" id="tabBadgeEffects"></span></button>
+          <button type="button" class="studio-tab" data-stab="system">⚙️ Система <span class="tab-badge hidden" id="tabBadgeSystem"></span></button>
         </div>
 
         <!-- TAB 1: Основное (Ниши, длина, кадр 9:16, поиск моментов, ручные таймкоды) -->
@@ -510,6 +510,7 @@
                   <select id="adAudioSelect">
                     <option value="">Без озвучки (пауза 3.5с)</option>
                   </select>
+                  <button id="btnPlayAdAudioPreview" type="button" class="btn btn-ghost btn-sm" title="Прослушать озвучку">▶</button>
                   <input id="adAudioFileInput" type="file" accept=".mp3,.wav,.m4a,.ogg" hidden />
                   <button id="btnUploadAdAudio" type="button" class="btn btn-secondary btn-sm">+ Озвучка</button>
                 </div>
@@ -537,6 +538,7 @@
                 <select id="bgMusicSelect">
                   <option value="">Без музыки</option>
                 </select>
+                <button id="btnPlayMusicPreview" type="button" class="btn btn-ghost btn-sm" title="Прослушать трек">▶</button>
                 <input id="musicFileInput" type="file" accept=".mp3,.wav,.m4a,.ogg" hidden />
                 <button id="btnUploadMusic" type="button" class="btn btn-secondary btn-sm">+ MP3</button>
               </div>
@@ -609,6 +611,16 @@
               <span class="switch"><input id="autoCleanWavToggle" type="checkbox" checked /><span class="slider"></span></span>
             </label>
           </div>
+
+          <div id="systemHealthBox" class="sub-box" style="margin-top: 12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <div class="pro-box-title" style="margin:0;">🩺 Здоровье системы</div>
+              <button id="btnQuickCleanCache" type="button" class="btn btn-ghost btn-sm">🧹 Очистить кэш</button>
+            </div>
+            <div id="systemHealthPills" class="health-pills">
+              <span class="history-meta">Проверка FFmpeg, GPU и yt-dlp...</span>
+            </div>
+          </div>
         </div>
 
         <div class="studio-cta-bar">
@@ -641,6 +653,7 @@
             </div>
             <div class="preview-bg-blur"></div>
             <div class="preview-video-frame">
+              <img id="previewRealFrame" class="preview-real-frame hidden" alt="" />
               <div class="preview-split-cam hidden" id="previewSplitCam">
                 <img id="previewSplitPhoto" class="preview-split-photo hidden" alt="" />
                 <span id="previewSplitCamText">🎥 ВЕБКА СТРИМЕРА</span>
@@ -685,7 +698,10 @@
           <h2 id="procTitle">Обработка видео...</h2>
           <div id="procMessage" class="proc-message">Подготовка...</div>
         </div>
-        <div id="procPct" class="proc-pct">0%</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button id="btnCancelJob" type="button" class="btn btn-ghost btn-sm hidden">⏹ Остановить</button>
+          <div id="procPct" class="proc-pct">0%</div>
+        </div>
       </div>
 
       <div class="progress-track lg">
@@ -756,6 +772,7 @@
         <h3>История проектов</h3>
         <button id="btnCloseHistory" class="btn btn-ghost btn-sm">✕</button>
       </div>
+      <input id="historySearchInput" type="search" placeholder="🔍 Поиск по названию проекта..." autocomplete="off" />
       <div id="historyList" class="history-list"></div>
     </div>
   </div>
