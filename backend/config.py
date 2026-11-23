@@ -17,13 +17,15 @@ AVATARS_DIR = DATA_DIR / "avatars"
 ADS_DIR = DATA_DIR / "ads"
 SATISFYING_DIR = DATA_DIR / "satisfying"
 OUTROS_DIR = DATA_DIR / "outros"
+LOGOS_DIR = DATA_DIR / "logos"
+CUSTOM_FONTS_DIR = DATA_DIR / "custom_fonts"
 EXPORTS_DIR = DATA_DIR / "exports"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 CONTENT_PLAN_FILE = DATA_DIR / "content_plan.json"
 FONTS_DIR = BASE_DIR / "backend" / "fonts"
 STATIC_DIR = BASE_DIR / "static"
 
-for _d in (DATA_DIR, UPLOADS_DIR, JOBS_DIR, MUSIC_DIR, AVATARS_DIR, ADS_DIR, SATISFYING_DIR, OUTROS_DIR, EXPORTS_DIR, FONTS_DIR, STATIC_DIR):
+for _d in (DATA_DIR, UPLOADS_DIR, JOBS_DIR, MUSIC_DIR, AVATARS_DIR, ADS_DIR, SATISFYING_DIR, OUTROS_DIR, LOGOS_DIR, CUSTOM_FONTS_DIR, EXPORTS_DIR, FONTS_DIR, STATIC_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 
@@ -111,7 +113,12 @@ FONT_CATALOG: List[Dict[str, Any]] = [
 
 
 def resolve_font_path(font_id: str) -> str:
-    """Return the first existing font file path for the given font_id."""
+    """Return the first existing font file path for the given font_id (built-in or custom TTF/OTF)."""
+    if font_id and font_id.startswith("custom:"):
+        fname = Path(font_id[7:]).name
+        cand = CUSTOM_FONTS_DIR / fname
+        if cand.exists():
+            return str(cand)
     for item in FONT_CATALOG:
         if item["id"] == font_id:
             for candidate in item["candidates"]:
@@ -146,6 +153,22 @@ def get_available_fonts() -> List[Dict[str, Any]]:
                 "bundled": Path(item["candidates"][0]).exists(),
             }
         )
+    if CUSTOM_FONTS_DIR.exists():
+        for cf in sorted(CUSTOM_FONTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if cf.is_file() and cf.suffix.lower() in (".ttf", ".otf"):
+                fam = f"CustomFont_{cf.stem}"
+                result.append(
+                    {
+                        "id": f"custom:{cf.name}",
+                        "name": f"🔤 {cf.stem} (свой)",
+                        "description": "Пользовательский шрифт",
+                        "css_family": f"'{fam}', 'Montserrat', sans-serif",
+                        "custom_url": f"/api/custom-fonts/{cf.name}",
+                        "custom_family": fam,
+                        "available": True,
+                        "bundled": False,
+                    }
+                )
     return result
 
 

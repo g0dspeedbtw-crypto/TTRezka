@@ -167,6 +167,12 @@
               <option value="30d">За 30 дней</option>
             </select>
             <button id="btnSearchTwitchClips" type="button" class="btn btn-primary btn-sm">🔍 Найти</button>
+            <button id="btnAddFavStreamer" type="button" class="btn btn-secondary btn-sm" title="Добавить стримера в монитор">⭐</button>
+          </div>
+          <div id="favStreamersBar" class="preset-library-bar" style="margin-bottom: 8px;">
+            <span class="preset-lib-label">📡 Монитор:</span>
+            <span id="favStreamersList" style="display:inline-flex;gap:5px;flex-wrap:wrap;"></span>
+            <button id="btnMonitorFavStreamers" type="button" class="btn btn-secondary btn-sm hidden" style="margin-left:auto;">📡 Проверить всех (24ч)</button>
           </div>
           <div class="music-row" style="justify-content: space-between; margin-bottom: 8px;">
             <span id="radarMeta" class="history-meta">Находит Топ-20 самых популярных клипов зрителей — в 1 клик в 9:16!</span>
@@ -287,6 +293,7 @@
                 </select>
                 <input id="avatarFileInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden />
                 <button id="btnUploadAvatar" type="button" class="btn btn-secondary btn-sm">+ Фото</button>
+                <button type="button" class="btn btn-ghost btn-sm btn-del-asset" data-kind="avatars" data-select="webcamPhotoSelect" title="Удалить выбранное фото">🗑</button>
               </div>
             </div>
             <div id="webcamCropRow" class="form-grid">
@@ -374,7 +381,11 @@
           <div class="form-grid three-col">
             <div class="field">
               <label for="fontSelect">Шрифт</label>
-              <select id="fontSelect"></select>
+              <div class="music-row">
+                <select id="fontSelect"></select>
+                <input id="customFontInput" type="file" accept=".ttf,.otf" hidden />
+                <button id="btnUploadFont" type="button" class="btn btn-secondary btn-sm" title="Загрузить свой шрифт .TTF / .OTF">+ TTF</button>
+              </div>
             </div>
             <div class="field">
               <label for="fontSize">Размер</label>
@@ -443,6 +454,17 @@
               <input id="watermarkOpacity" type="range" min="20" max="100" value="55" />
             </div>
           </div>
+          <div class="field" style="margin-top: 8px;">
+            <label for="watermarkLogoSelect">🖼️ Или прозрачный логотип канала (.PNG вместо текста)</label>
+            <div class="music-row">
+              <select id="watermarkLogoSelect">
+                <option value="">Без PNG-логотипа (использовать текст)</option>
+              </select>
+              <input id="logoFileInput" type="file" accept="image/png,image/webp,image/jpeg,.png,.webp,.jpg" hidden />
+              <button id="btnUploadLogo" type="button" class="btn btn-secondary btn-sm">+ PNG</button>
+              <button type="button" class="btn btn-ghost btn-sm btn-del-asset" data-kind="logos" data-select="watermarkLogoSelect" title="Удалить логотип">🗑</button>
+            </div>
+          </div>
         </div>
 
         <!-- TAB 3: Эффекты и реклама -->
@@ -491,6 +513,7 @@
                 </select>
                 <input id="satisfyingFileInput" type="file" accept="video/*,.mp4,.mov,.mkv,.webm" hidden />
                 <button id="btnUploadSatisfying" type="button" class="btn btn-secondary btn-sm">+ Залипашка</button>
+                <button type="button" class="btn btn-ghost btn-sm btn-del-asset" data-kind="satisfying" data-select="satisfyingSelect" title="Удалить видео">🗑</button>
               </div>
             </div>
           </div>
@@ -514,6 +537,7 @@
                   </select>
                   <input id="adBannerFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" hidden />
                   <button id="btnUploadAdBanner" type="button" class="btn btn-secondary btn-sm">+ Баннер</button>
+                  <button type="button" class="btn btn-ghost btn-sm btn-del-asset" data-kind="ads" data-select="adBannerSelect" title="Удалить баннер">🗑</button>
                 </div>
               </div>
               <div class="field hidden" id="adAudioRow">
@@ -539,6 +563,7 @@
                 </select>
                 <input id="outroFileInput" type="file" accept="video/*,image/png,image/jpeg,image/webp,.mp4,.mov,.webm,.png,.jpg,.jpeg,.webp" hidden />
                 <button id="btnUploadOutro" type="button" class="btn btn-secondary btn-sm">+ Аутро</button>
+                <button type="button" class="btn btn-ghost btn-sm btn-del-asset" data-kind="outros" data-select="outroSelect" title="Удалить аутро">🗑</button>
               </div>
             </div>
           </div>
@@ -554,6 +579,7 @@
                   <button id="btnPlayMusicPreview" type="button" class="btn btn-ghost btn-sm" title="Прослушать трек">▶</button>
                   <input id="musicFileInput" type="file" accept=".mp3,.wav,.m4a,.ogg" hidden />
                   <button id="btnUploadMusic" type="button" class="btn btn-secondary btn-sm">+ MP3</button>
+                  <button type="button" class="btn btn-ghost btn-sm btn-del-asset" data-kind="music" data-select="bgMusicSelect" title="Удалить трек">🗑</button>
                 </div>
               </div>
               <div class="field">
@@ -659,6 +685,7 @@
                 <a href="/api/backup/export" download class="btn btn-secondary btn-sm">💾 Бэкап (.zip)</a>
                 <input id="restoreBackupInput" type="file" accept=".zip,application/zip" hidden />
                 <button id="btnRestoreBackup" type="button" class="btn btn-secondary btn-sm">📂 Восстановить</button>
+                <button id="btnUpdateYtdlp" type="button" class="btn btn-ghost btn-sm" title="Обновить движок yt-dlp для YouTube/Twitch">🔄 yt-dlp</button>
                 <button id="btnQuickCleanCache" type="button" class="btn btn-ghost btn-sm">🧹 Кэш</button>
                 <button id="btnResetAllSettings" type="button" class="btn btn-ghost btn-sm">🔄 Сброс</button>
               </div>
@@ -816,9 +843,49 @@
         <button id="btnCutCustom" type="button" class="btn btn-secondary btn-sm">Вырезать 9:16</button>
       </div>
 
+      <!-- Clips Sort / Filter / Compact Grid Toolbar (#12) -->
+      <div id="clipsFilterBar" class="clips-filter-bar hidden">
+        <div class="music-row" style="flex-wrap:wrap;gap:6px;">
+          <button type="button" class="preset-chip active" data-cfilter="all">Все</button>
+          <button type="button" class="preset-chip" data-cfilter="fav">⭐ Избранные</button>
+          <button type="button" class="preset-chip" data-cfilter="unpub">🆕 Неопубликованные</button>
+        </div>
+        <div class="music-row" style="gap:6px;">
+          <select id="clipsSortSelect" style="width:auto;padding:5px 10px;font-size:12px;">
+            <option value="score">🔥 По виральности</option>
+            <option value="time">⏱ По таймкоду</option>
+          </select>
+          <button id="btnToggleCompactGrid" type="button" class="btn btn-ghost btn-sm">📐 Компактно</button>
+        </div>
+      </div>
+
       <div id="clipsGrid" class="clips-grid"></div>
     </section>
   </main>
+
+  <!-- TikTok Feed Lightbox Modal (#11) -->
+  <div id="clipLightboxModal" class="modal hidden">
+    <div class="modal-backdrop" id="lightboxBackdrop"></div>
+    <div class="lightbox-panel">
+      <div class="lightbox-video-col">
+        <video id="lightboxVideo" controls autoplay playsinline></video>
+      </div>
+      <div class="lightbox-info-col">
+        <div class="modal-header" style="padding-bottom:8px;">
+          <h3 id="lightboxTitle" style="font-size:15px;">Клип</h3>
+          <button id="btnCloseLightbox" class="btn btn-ghost btn-sm">✕</button>
+        </div>
+        <div id="lightboxMeta" class="history-meta"></div>
+        <div id="lightboxTranscript" class="history-meta" style="max-height:160px;overflow-y:auto;line-height:1.45;"></div>
+        <div style="display:flex;gap:8px;margin-top:auto;flex-wrap:wrap;">
+          <button id="btnLightboxPrev" type="button" class="btn btn-secondary btn-sm">← Назад</button>
+          <button id="btnLightboxNext" type="button" class="btn btn-secondary btn-sm">Дальше →</button>
+          <button id="btnLightboxFav" type="button" class="btn btn-ghost btn-sm">⭐</button>
+          <button id="btnLightboxDel" type="button" class="btn btn-ghost btn-sm">🗑</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- History Drawer -->
   <div id="historyDrawer" class="drawer hidden">

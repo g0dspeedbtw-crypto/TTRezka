@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.accounts import list_accounts
 from backend.ai_director import find_funny_moments_gemini, find_funny_moments_ollama
-from backend.config import ADS_DIR, AVATARS_DIR, EXPORTS_DIR, JOBS_DIR, MUSIC_DIR, OUTROS_DIR, SATISFYING_DIR, load_settings
+from backend.config import ADS_DIR, AVATARS_DIR, EXPORTS_DIR, JOBS_DIR, LOGOS_DIR, MUSIC_DIR, OUTROS_DIR, SATISFYING_DIR, load_settings
 from backend.hardware import get_hardware_info
 from backend.highlights import (
     _find_audio_peak_times,
@@ -29,7 +29,7 @@ from backend.remote import (
     probe_remote_url,
 )
 from backend.renderer import merge_clips_compilation, probe_video, render_clip
-from backend.studio_extras import parse_manual_timecodes
+from backend.studio_extras import build_clip_srt, parse_manual_timecodes
 from backend.telegram_export import send_clip_to_telegram
 from backend.transcriber import extract_audio_wav, transcribe_russian
 from backend.twitch_chat import generate_tiktok_caption
@@ -161,6 +161,13 @@ def _resolve_outro_path(outro_id: Optional[str]) -> Optional[Path]:
     if not outro_id:
         return None
     p = OUTROS_DIR / Path(outro_id).name
+    return p if p.exists() else None
+
+
+def _resolve_logo_path(logo_id: Optional[str]) -> Optional[Path]:
+    if not logo_id:
+        return None
+    p = LOGOS_DIR / Path(logo_id).name
     return p if p.exists() else None
 
 
@@ -328,6 +335,7 @@ def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str
         "hook_font_size": options.get("hook_font_size", "medium"),
         "watermark_text": (options.get("watermark_text") or "").strip() or None,
         "watermark_opacity": float(options.get("watermark_opacity", 0.55)),
+        "watermark_logo_path": _resolve_logo_path(options.get("watermark_logo_id")),
         "jump_cuts": bool(options.get("jump_cuts", False)),
         "bg_music_path": _resolve_music_path(options.get("bg_music_id")),
         "bg_music_volume": float(options.get("bg_music_volume", 0.18)),
@@ -1583,3 +1591,114 @@ def get_job_hype_timeline(job_id: str, num_bins: int = 72) -> Dict[str, Any]:
         for i in range(n)
     ]
     return {"duration": round(duration, 2), "bins": out_bins, "source": " + ".join(sources) or "none"}
+
+
+def toggle_clip_favorite(job_id: str, clip_id: str) -> Optional[Dict[str, Any]]:
+    """Feature #12 (v3.1): Star/unstar favorite clips."""
+    with _LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return None
+        updated = None
+        for c in job.get("clips") or []:
+            if c.get("id") == clip_id:
+                c["favorite"] = not bool(c.get("favorite", False))
+                updated = dict(c)
+                break
+        if updated is not None:
+            _save_job(job)
+    return updated
+
+
+def get_clip_srt(job_id: str, clip_id: str) -> str:
+    """Feature #18 (v3.1): Export time-aligned .SRT subtitles for CapCut / Premiere Pro."""
+    job = get_job(job_id)
+    if not job:
+        raise ValueError("Проект не найден")
+    clip = next((c for c in (job.get("clips") or []) if c.get("id") == clip_id), None)
+    if not clip:
+        raise ValueError("Клип не найден")
+    jdir = _job_dir(job_id)
+    words = []
+    # Check clip-specific words first (remote), then job-level words.json (local)
+    clip_w_path = jdir / f"{clip_id}_words.json"
+    job_w_path = jdir / "words.json"
+    if clip_w_path.exists():
+        try:
+            words = json.loads(clip_w_path.read_text(encoding="utf-8"))
+        except Exception:
+            words = []
+        return build_clip_srt(words, 0.0, float(clip.get("duration") or 30.0), clip.get("transcript", ""))
+    if job_w_path.exists():
+        try:
+            words = json.loads(job_w_path.read_text(encoding="utf-8")).get("words", [])
+        except Exception:
+            words = []
+    return build_clip_srt(words, float(clip.get("start") or 0.0), float(clip.get("end") or 30.0), clip.get("transcript", ""))
+
+
+def multi_render_clip_for_accounts(job_id: str, clip_id: str, base_options: Dict[str, Any]) -> Dict[str, Any]:
+    """Feature #15 (v3.1): Render 1 winning clip into unique versions for ALL studio accounts in 1 click!"""
+    job = get_job(job_id)
+    if not job:
+        raise ValueError("Проект не найден")
+    clip = next((c for c in (job.get("clips") or []) if c.get("id") == clip_id), None)
+    if not clip:
+        raise ValueError("Клип не найден")
+    accounts = list_accounts()
+    if not accounts:
+        raise ValueError("Сначала создайте хотя бы один аккаунт в верхней панели студии")
+
+    jdir = _job_dir(job_id)
+    raw_seg = Path(clip.get("raw_segment_path") or "")
+    if raw_seg.exists():
+        src_video = raw_seg
+        s_t = float(clip.get("trim_start") or 0.0)
+        e_t = float(clip.get("trim_end") or clip.get("duration") or 30.0)
+    else:
+        src_video = Path(job.get("video_path") or "")
+        if not src_video.exists():
+            raise ValueError("Исходное видео для перерендера не найдено")
+        s_t = float(clip.get("start") or 0.0)
+        e_t = float(clip.get("end") or 30.0)
+
+    words = []
+    job_w = jdir / "words.json"
+    if job_w.exists():
+        try:
+            words = json.loads(job_w.read_text(encoding="utf-8")).get("words", [])
+        except Exception:
+            words = []
+
+    out_dir = EXPORTS_DIR / f"MultiAccount_{job_id}_{clip_id}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cap_lines: List[str] = []
+    rendered_accs: List[str] = []
+
+    for acc in accounts:
+        merged_opts = dict(base_options)
+        merged_opts.update(acc.get("preset") or {})
+        merged_opts["uniquify_video"] = True
+        if acc.get("handle") and not merged_opts.get("watermark_text"):
+            merged_opts["watermark_text"] = acc["handle"]
+
+        safe_acc = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ _-]+", "", acc.get("name") or "Account").strip() or "Account"
+        out_mp4 = out_dir / f"{safe_acc}_{clip_id}.mp4"
+        out_thumb = out_dir / f"{safe_acc}_{clip_id}.jpg"
+        r_kwargs = _extract_render_kwargs(merged_opts, clip.get("hook_text") or clip.get("title") or "")
+        render_clip(
+            source_video=src_video,
+            output_mp4=out_mp4,
+            thumb_jpg=out_thumb,
+            clip_start=s_t,
+            clip_end=e_t,
+            words=words,
+            **r_kwargs,
+        )
+        rendered_accs.append(acc.get("name") or safe_acc)
+        tpl = acc.get("caption_template") or "{title} 🔥\n\n{hashtags}"
+        cap = tpl.replace("{title}", clip.get("title") or "").replace("{hashtags}", acc.get("default_hashtags") or "")
+        cap_lines.append(f"=== {acc.get('name')} ({acc.get('handle') or ''}) ===\n{cap}\n")
+
+    (out_dir / "captions_by_account.txt").write_text("\n".join(cap_lines), encoding="utf-8")
+    return {"folder": str(out_dir.resolve()), "count": len(rendered_accs), "accounts": rendered_accs}

@@ -919,6 +919,7 @@ def render_clip(
     hook_font_size: str = "medium",
     watermark_text: Optional[str] = None,
     watermark_opacity: float = 0.55,
+    watermark_logo_path: Optional[Path] = None,
     jump_cuts: bool = False,
     bg_music_path: Optional[Path] = None,
     bg_music_volume: float = 0.18,
@@ -1042,7 +1043,24 @@ def render_clip(
             next_idx += 1
 
         wm_idx: Optional[int] = None
-        if watermark_text and watermark_text.strip():
+        if watermark_logo_path and Path(watermark_logo_path).exists():
+            # Feature #14 (v3.1): Transparent PNG channel logo watermark with opacity!
+            wm_png = tmp_dir / "watermark_logo.png"
+            logo_im = Image.open(watermark_logo_path).convert("RGBA")
+            logo_im.thumbnail((240, 110), Image.LANCZOS)
+            op = max(0.15, min(1.0, float(watermark_opacity or 0.55)))
+            if op < 0.99:
+                alpha_ch = logo_im.getchannel("A").point(lambda v: int(v * op))
+                logo_im.putalpha(alpha_ch)
+            canvas = Image.new("RGBA", (VIDEO_W, 130), (0, 0, 0, 0))
+            lx = VIDEO_W - logo_im.width - 42
+            ly = max(8, (130 - logo_im.height) // 2)
+            canvas.paste(logo_im, (lx, ly), logo_im)
+            canvas.save(wm_png)
+            inputs.extend(["-i", str(wm_png)])
+            wm_idx = next_idx
+            next_idx += 1
+        elif watermark_text and watermark_text.strip():
             wm_png = tmp_dir / "watermark.png"
             _render_watermark(watermark_text.strip(), font_path, watermark_opacity).save(wm_png)
             inputs.extend(["-i", str(wm_png)])

@@ -86,6 +86,29 @@
   const btnTgSyncPull = document.getElementById('btnTgSyncPull');
   const btnRestoreBackup = document.getElementById('btnRestoreBackup');
   const restoreBackupInput = document.getElementById('restoreBackupInput');
+  const btnUpdateYtdlp = document.getElementById('btnUpdateYtdlp');
+  const btnUploadFont = document.getElementById('btnUploadFont');
+  const customFontInput = document.getElementById('customFontInput');
+  const watermarkLogoSelect = document.getElementById('watermarkLogoSelect');
+  const logoFileInput = document.getElementById('logoFileInput');
+  const btnUploadLogo = document.getElementById('btnUploadLogo');
+  const btnAddFavStreamer = document.getElementById('btnAddFavStreamer');
+  const favStreamersList = document.getElementById('favStreamersList');
+  const btnMonitorFavStreamers = document.getElementById('btnMonitorFavStreamers');
+  const clipsFilterBar = document.getElementById('clipsFilterBar');
+  const clipsSortSelect = document.getElementById('clipsSortSelect');
+  const btnToggleCompactGrid = document.getElementById('btnToggleCompactGrid');
+  const clipLightboxModal = document.getElementById('clipLightboxModal');
+  const lightboxBackdrop = document.getElementById('lightboxBackdrop');
+  const btnCloseLightbox = document.getElementById('btnCloseLightbox');
+  const lightboxVideo = document.getElementById('lightboxVideo');
+  const lightboxTitle = document.getElementById('lightboxTitle');
+  const lightboxMeta = document.getElementById('lightboxMeta');
+  const lightboxTranscript = document.getElementById('lightboxTranscript');
+  const btnLightboxPrev = document.getElementById('btnLightboxPrev');
+  const btnLightboxNext = document.getElementById('btnLightboxNext');
+  const btnLightboxFav = document.getElementById('btnLightboxFav');
+  const btnLightboxDel = document.getElementById('btnLightboxDel');
   const urlInput = document.getElementById('urlInput');
   const btnProbeUrl = document.getElementById('btnProbeUrl');
   const dropZone = document.getElementById('dropZone');
@@ -349,6 +372,9 @@
     if (tgAutoSendToggle && typeof savedSettings.tg_auto_send === 'boolean') {
       tgAutoSendToggle.checked = savedSettings.tg_auto_send;
     }
+    state.favoriteStreamers = Array.isArray(savedSettings.favorite_streamers) ? savedSettings.favorite_streamers : [];
+    renderFavoriteStreamers();
+    injectCustomFontFaces(state.fonts);
     applyHardwareInfo(cfg.hardware);
 
     renderStyleCards();
@@ -1457,6 +1483,7 @@
       hook_font_size: hookFontSize ? hookFontSize.value : 'medium',
       watermark_text: (watermarkInput.value || '').trim() || null,
       watermark_opacity: watermarkOpacity ? (parseInt(watermarkOpacity.value, 10) || 55) / 100.0 : 0.55,
+      watermark_logo_id: watermarkLogoSelect ? watermarkLogoSelect.value || null : null,
       jump_cuts: jumpCutsToggle.checked,
       bg_music_id: bgMusicSelect.value || null,
       bg_music_volume: bgMusicVolume ? (parseInt(bgMusicVolume.value, 10) || 18) / 100.0 : 0.18,
@@ -1842,9 +1869,20 @@
       if (btnToggleSelectAll) btnToggleSelectAll.classList.add('hidden');
       if (btnCopyAllCaptions) btnCopyAllCaptions.classList.add('hidden');
     }
+    if (clipsFilterBar) clipsFilterBar.classList.toggle('hidden', job.clips.length === 0);
     clipsGrid.innerHTML = '';
 
-    job.clips.forEach((clip) => {
+    // #12 Apply active filter & sort before rendering cards
+    const curFilter = state.clipFilter || 'all';
+    const curSort = clipsSortSelect ? clipsSortSelect.value : 'score';
+    let displayClips = [...(job.clips || [])];
+    if (curFilter === 'fav') displayClips = displayClips.filter((c) => c.favorite);
+    else if (curFilter === 'unpub') displayClips = displayClips.filter((c) => !(c.published_to && c.published_to.length));
+    if (curSort === 'time') displayClips.sort((a, b) => (a.start || 0) - (b.start || 0));
+    else displayClips.sort((a, b) => (b.favorite ? 1000 : 0) + (b.viral_score || 0) - ((a.favorite ? 1000 : 0) + (a.viral_score || 0)));
+    state.displayClips = displayClips;
+
+    displayClips.forEach((clip, dispIdx) => {
       const v = clip.version || 1;
       const videoUrl = `/api/jobs/${job.job_id}/clips/${clip.id}/video?v=${v}`;
       const thumbUrl = `/api/jobs/${job.job_id}/clips/${clip.id}/thumb?v=${v}`;
@@ -1889,7 +1927,11 @@
           </div>
           <div class="clip-meta-bar">
             <span>1080×1920 • ${job.options?.target_fps || 30} FPS • ${clip.file_size_mb || '?'} МБ</span>
-            <div style="display:flex;gap:4px;">
+            <div style="display:flex;gap:3px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-ghost btn-sm btn-open-lightbox" title="Открыть в режиме ленты TikTok (← / →)">🔍</button>
+              <button type="button" class="btn btn-ghost btn-sm btn-fav-clip" title="В избранное">${clip.favorite ? '⭐' : '☆'}</button>
+              <button type="button" class="btn btn-ghost btn-sm btn-multi-acc" title="Отрендерить уникальные версии для ВСЕХ аккаунтов в 1 клик">🔄</button>
+              <a class="btn btn-ghost btn-sm" href="/api/jobs/${job.job_id}/clips/${clip.id}/srt" download="${clip.id}.srt" title="Скачать субтитры .SRT для CapCut / Premiere">SRT</a>
               <button type="button" class="btn btn-ghost btn-sm btn-send-tg" title="Отправить этот клип в Telegram">${clip.sent_telegram ? '✈️✅' : '✈️'}</button>
               <button type="button" class="btn btn-ghost btn-sm btn-reveal-clip" title="Показать MP4 в папке">📂</button>
               <button type="button" class="btn btn-ghost btn-sm btn-delete-clip" title="Удалить этот клип из проекта">🗑</button>
@@ -1897,6 +1939,51 @@
           </div>
         </div>
       `;
+
+      // #11 Open TikTok Feed Lightbox
+      const btnLb = card.querySelector('.btn-open-lightbox');
+      if (btnLb) btnLb.addEventListener('click', () => openClipLightbox(job, dispIdx));
+
+      // #12 Toggle Favorite Star
+      const btnFav = card.querySelector('.btn-fav-clip');
+      if (btnFav) {
+        btnFav.addEventListener('click', async () => {
+          const r = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/favorite`, { method: 'PATCH' });
+          if (r.ok) {
+            const u = await r.json();
+            clip.favorite = !!u.favorite;
+            btnFav.textContent = clip.favorite ? '⭐' : '☆';
+            showToast(clip.favorite ? '⭐ Добавлено в избранное' : 'Убрано из избранного');
+          }
+        });
+      }
+
+      // #15 Multi-Account Render in 1 Click
+      const btnMulti = card.querySelector('.btn-multi-acc');
+      if (btnMulti) {
+        btnMulti.addEventListener('click', async () => {
+          btnMulti.disabled = true;
+          btnMulti.textContent = '⏳';
+          try {
+            const r = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/multi-render`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(getCurrentOptions(0)),
+            });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.detail || 'Ошибка мульти-рендера');
+            showToast(`🔄 Готово! Отрендерено ${d.count} уникальных версий для всех аккаунтов!`);
+            if (window.tikcutDesktop && window.tikcutDesktop.openFolder && d.folder) {
+              window.tikcutDesktop.openFolder(d.folder);
+            }
+          } catch (err) {
+            showToast(err.message || 'Ошибка мульти-рендера');
+          } finally {
+            btnMulti.disabled = false;
+            btnMulti.textContent = '🔄';
+          }
+        });
+      }
 
       // #1 Single Active Video Player: pause all other clips when this clip starts playing!
       const vidEl = card.querySelector('video');
@@ -3587,6 +3674,309 @@
     }
   });
 
+  // =====================================================================
+  // v3.1.0: yt-dlp Update (#7), Asset Delete (#9), Lightbox (#11),
+  // Sort/Filter (#12), PNG Logo & Custom Fonts (#14), Streamer Monitor (#17)
+  // =====================================================================
+
+  function injectCustomFontFaces(fonts) {
+    let styleEl = document.getElementById('tikcutCustomFontStyles');
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = 'tikcutCustomFontStyles';
+      document.head.appendChild(styleEl);
+    }
+    const rules = (fonts || [])
+      .filter((f) => f.custom_url && f.custom_family)
+      .map((f) => `@font-face { font-family: '${f.custom_family}'; src: url('${f.custom_url}'); font-display: swap; }`)
+      .join('\n');
+    styleEl.textContent = rules;
+  }
+
+  // #14 Upload Custom TTF/OTF Font
+  if (btnUploadFont && customFontInput) {
+    btnUploadFont.addEventListener('click', () => customFontInput.click());
+    customFontInput.addEventListener('change', async () => {
+      const f = customFontInput.files && customFontInput.files[0];
+      if (!f) return;
+      btnUploadFont.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', f);
+        const res = await fetch('/api/custom-fonts', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки шрифта');
+        state.fonts = data.fonts || state.fonts;
+        injectCustomFontFaces(state.fonts);
+        renderFontOptions();
+        state.selectedFont = data.id;
+        if (fontSelect) fontSelect.value = data.id;
+        updateLivePreview();
+        showToast(`🔤 Шрифт «${data.name}» добавлен!`);
+      } catch (err) {
+        showToast(err.message || 'Ошибка загрузки шрифта');
+      } finally {
+        btnUploadFont.disabled = false;
+        customFontInput.value = '';
+      }
+    });
+  }
+
+  // #14 PNG Channel Logos
+  async function refreshLogosList() {
+    if (!watermarkLogoSelect) return;
+    try {
+      const res = await fetch('/api/logos');
+      const data = await res.json();
+      const cur = watermarkLogoSelect.value;
+      watermarkLogoSelect.innerHTML = '<option value="">Без PNG-логотипа (использовать текст)</option>';
+      (data.items || []).forEach((it) => {
+        const opt = document.createElement('option');
+        opt.value = it.id;
+        opt.textContent = it.name;
+        watermarkLogoSelect.appendChild(opt);
+      });
+      if (cur) watermarkLogoSelect.value = cur;
+    } catch (_) {}
+  }
+  if (btnUploadLogo && logoFileInput) {
+    btnUploadLogo.addEventListener('click', () => logoFileInput.click());
+    logoFileInput.addEventListener('change', async () => {
+      const f = logoFileInput.files && logoFileInput.files[0];
+      if (!f) return;
+      btnUploadLogo.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', f);
+        const res = await fetch('/api/logos', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки логотипа');
+        await refreshLogosList();
+        watermarkLogoSelect.value = data.id;
+        showToast(`🖼️ PNG-логотип «${data.name}» добавлен!`);
+      } catch (err) {
+        showToast(err.message || 'Ошибка загрузки логотипа');
+      } finally {
+        btnUploadLogo.disabled = false;
+        logoFileInput.value = '';
+      }
+    });
+  }
+
+  // #9 Delete Unused Assets Buttons
+  document.querySelectorAll('.btn-del-asset').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const kind = btn.dataset.kind;
+      const sel = document.getElementById(btn.dataset.select);
+      if (!sel || !sel.value) return showToast('Сначала выберите файл в списке');
+      const val = sel.value;
+      const res = await fetch(`/api/assets/${kind}/${encodeURIComponent(val)}`, { method: 'DELETE' });
+      if (res.ok) {
+        const opt = sel.querySelector(`option[value="${CSS.escape(val)}"]`);
+        if (opt) opt.remove();
+        sel.value = '';
+        syncAssetMiniThumbs();
+        updateTabBadges();
+        showToast('🗑 Файл удалён');
+      }
+    });
+  });
+
+  // #7 One-Click yt-dlp Update
+  if (btnUpdateYtdlp) {
+    btnUpdateYtdlp.addEventListener('click', async () => {
+      btnUpdateYtdlp.disabled = true;
+      btnUpdateYtdlp.textContent = '⏳...';
+      try {
+        const res = await fetch('/api/system/update-ytdlp', { method: 'POST' });
+        const data = await res.json();
+        showToast(data.message || 'Готово');
+        loadSystemHealth();
+      } catch (_) {
+        showToast('Ошибка обновления yt-dlp');
+      } finally {
+        btnUpdateYtdlp.disabled = false;
+        btnUpdateYtdlp.textContent = '🔄 yt-dlp';
+      }
+    });
+  }
+
+  // #12 Sort / Filter / Compact Grid Toolbar
+  if (clipsFilterBar) {
+    clipsFilterBar.querySelectorAll('[data-cfilter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.clipFilter = btn.dataset.cfilter || 'all';
+        clipsFilterBar.querySelectorAll('[data-cfilter]').forEach((b) => b.classList.toggle('active', b === btn));
+        if (state.lastRenderedJob) renderClips(state.lastRenderedJob);
+      });
+    });
+  }
+  if (clipsSortSelect) {
+    clipsSortSelect.addEventListener('change', () => {
+      if (state.lastRenderedJob) renderClips(state.lastRenderedJob);
+    });
+  }
+  if (btnToggleCompactGrid) {
+    btnToggleCompactGrid.addEventListener('click', () => {
+      const compact = clipsGrid.classList.toggle('compact');
+      btnToggleCompactGrid.textContent = compact ? '📐 Крупно' : '📐 Компактно';
+    });
+  }
+
+  // #11 TikTok Feed Lightbox Modal (← / → swipe + Star + Delete)
+  let lbJob = null;
+  let lbIdx = 0;
+  function renderLightboxSlide() {
+    const list = state.displayClips || [];
+    if (!lbJob || !list.length || !clipLightboxModal) return;
+    lbIdx = Math.max(0, Math.min(list.length - 1, lbIdx));
+    const clip = list[lbIdx];
+    const v = clip.version || 1;
+    if (lightboxVideo) {
+      lightboxVideo.src = `/api/jobs/${lbJob.job_id}/clips/${clip.id}/video?v=${v}`;
+      lightboxVideo.play().catch(() => {});
+    }
+    if (lightboxTitle) lightboxTitle.textContent = `${lbIdx + 1}/${list.length}: ${clip.title || 'Клип'}`;
+    if (lightboxMeta) lightboxMeta.textContent = `🔥 ${clip.viral_score || 0}/100 • ${formatDuration(clip.start)}–${formatDuration(clip.end)} (${Math.round(clip.duration || 0)}с)`;
+    if (lightboxTranscript) lightboxTranscript.textContent = clip.transcript || 'Без речи';
+    if (btnLightboxFav) btnLightboxFav.textContent = clip.favorite ? '⭐ В избранном' : '☆ В избранное';
+  }
+  function openClipLightbox(job, idx) {
+    lbJob = job;
+    lbIdx = idx;
+    clipsGrid.querySelectorAll('video').forEach((v) => v.pause());
+    if (clipLightboxModal) clipLightboxModal.classList.remove('hidden');
+    renderLightboxSlide();
+  }
+  function closeClipLightbox() {
+    if (lightboxVideo) lightboxVideo.pause();
+    if (clipLightboxModal) clipLightboxModal.classList.add('hidden');
+  }
+  if (btnCloseLightbox) btnCloseLightbox.addEventListener('click', closeClipLightbox);
+  if (lightboxBackdrop) lightboxBackdrop.addEventListener('click', closeClipLightbox);
+  if (btnLightboxPrev) btnLightboxPrev.addEventListener('click', () => { lbIdx--; renderLightboxSlide(); });
+  if (btnLightboxNext) btnLightboxNext.addEventListener('click', () => { lbIdx++; renderLightboxSlide(); });
+  if (btnLightboxFav) {
+    btnLightboxFav.addEventListener('click', async () => {
+      const clip = (state.displayClips || [])[lbIdx];
+      if (!lbJob || !clip) return;
+      const r = await fetch(`/api/jobs/${lbJob.job_id}/clips/${clip.id}/favorite`, { method: 'PATCH' });
+      if (r.ok) {
+        clip.favorite = !!(await r.json()).favorite;
+        renderLightboxSlide();
+        renderClips(lbJob);
+      }
+    });
+  }
+  if (btnLightboxDel) {
+    btnLightboxDel.addEventListener('click', async () => {
+      const clip = (state.displayClips || [])[lbIdx];
+      if (!lbJob || !clip) return;
+      const r = await fetch(`/api/jobs/${lbJob.job_id}/clips/${clip.id}`, { method: 'DELETE' });
+      if (r.ok) {
+        lbJob.clips = (lbJob.clips || []).filter((c) => c.id !== clip.id);
+        renderClips(lbJob);
+        if ((state.displayClips || []).length) renderLightboxSlide();
+        else closeClipLightbox();
+        showToast('Клип удалён');
+      }
+    });
+  }
+  window.addEventListener('keydown', (ev) => {
+    if (!clipLightboxModal || clipLightboxModal.classList.contains('hidden')) return;
+    if (ev.key === 'ArrowLeft') { ev.preventDefault(); lbIdx--; renderLightboxSlide(); }
+    else if (ev.key === 'ArrowRight') { ev.preventDefault(); lbIdx++; renderLightboxSlide(); }
+    else if (ev.key === 'Escape') { closeClipLightbox(); }
+  });
+
+  // #17 Favorite Streamers Monitor
+  function renderFavoriteStreamers() {
+    if (!favStreamersList) return;
+    const list = state.favoriteStreamers || [];
+    if (btnMonitorFavStreamers) btnMonitorFavStreamers.classList.toggle('hidden', list.length === 0);
+    if (!list.length) {
+      favStreamersList.innerHTML = '<span class="history-meta">Нажмите ⭐, чтобы добавить стримера</span>';
+      return;
+    }
+    favStreamersList.innerHTML = list.map((s) => `
+      <span class="preset-chip" style="display:inline-flex;align-items:center;gap:4px;">
+        <span class="fav-st-go" data-s="${escapeHtml(s)}" style="cursor:pointer;">${escapeHtml(s)}</span>
+        <span class="fav-st-rm" data-s="${escapeHtml(s)}" style="cursor:pointer;opacity:0.7;">×</span>
+      </span>
+    `).join('');
+    favStreamersList.querySelectorAll('.fav-st-go').forEach((el) => {
+      el.addEventListener('click', () => {
+        if (radarStreamerInput) radarStreamerInput.value = el.dataset.s;
+        if (btnSearchTwitchClips) btnSearchTwitchClips.click();
+      });
+    });
+    favStreamersList.querySelectorAll('.fav-st-rm').forEach((el) => {
+      el.addEventListener('click', () => {
+        state.favoriteStreamers = (state.favoriteStreamers || []).filter((x) => x !== el.dataset.s);
+        saveNetSetting({ favorite_streamers: state.favoriteStreamers });
+        renderFavoriteStreamers();
+      });
+    });
+  }
+  if (btnAddFavStreamer && radarStreamerInput) {
+    btnAddFavStreamer.addEventListener('click', () => {
+      const lg = (radarStreamerInput.value || '').trim().toLowerCase().replace(/^@/, '');
+      if (!lg) return showToast('Введите ник стримера');
+      state.favoriteStreamers = Array.from(new Set([...(state.favoriteStreamers || []), lg])).slice(0, 15);
+      saveNetSetting({ favorite_streamers: state.favoriteStreamers });
+      renderFavoriteStreamers();
+      showToast(`⭐ Стример ${lg} добавлен в монитор!`);
+    });
+  }
+  if (btnMonitorFavStreamers) {
+    btnMonitorFavStreamers.addEventListener('click', async () => {
+      const list = state.favoriteStreamers || [];
+      if (!list.length) return;
+      btnMonitorFavStreamers.disabled = true;
+      btnMonitorFavStreamers.textContent = '⏳ Сканирование...';
+      try {
+        const res = await fetch('/api/twitch-clips/monitor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ streamers: list, period: '24h' }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка монитора');
+        lastRadarClips = data.clips || [];
+        if (radarMeta) radarMeta.textContent = `📡 Монитор (${list.length} каналов): найдено ${lastRadarClips.length} горячих клипов за 24ч`;
+        if (btnRadarTop5Batch) btnRadarTop5Batch.classList.toggle('hidden', lastRadarClips.length < 2);
+        if (radarResultsGrid) {
+          radarResultsGrid.classList.toggle('hidden', !lastRadarClips.length);
+          radarResultsGrid.innerHTML = lastRadarClips.map((c, idx) => `
+            <div class="radar-card">
+              ${c.thumbnail ? `<img src="${escapeHtml(c.thumbnail)}" alt="" loading="lazy" />` : ''}
+              <div class="radar-card-body">
+                <div class="radar-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
+                <div class="radar-meta"><strong>${escapeHtml(c.streamer)}</strong> • 👁 ${Number(c.views || 0).toLocaleString('ru-RU')} • ${c.duration}с</div>
+                <button type="button" class="btn btn-primary btn-sm btn-radar-pick" data-idx="${idx}" style="margin-top:auto;">⚡ В 9:16</button>
+              </div>
+            </div>
+          `).join('');
+          radarResultsGrid.querySelectorAll('.btn-radar-pick').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+              const clip = lastRadarClips[Number(btn.dataset.idx)];
+              if (!clip) return;
+              switchSourceTab('url');
+              urlInput.value = clip.url;
+              await probeUrl();
+            });
+          });
+        }
+      } catch (err) {
+        showToast(err.message || 'Ошибка монитора');
+      } finally {
+        btnMonitorFavStreamers.disabled = false;
+        btnMonitorFavStreamers.textContent = '📡 Проверить всех (24ч)';
+      }
+    });
+  }
+
+  refreshLogosList();
   refreshOutrosList();
   loadSystemHealth();
   init().then(() => setTimeout(() => { restoreLastSettings(); syncAssetMiniThumbs(); }, 250));

@@ -395,3 +395,80 @@ def restore_studio_backup_zip(zip_bytes: bytes) -> Dict[str, Any]:
                 (dest_dir / rel.name).write_bytes(zf.read(info))
                 restored += 1
     return {"ok": True, "restored_files": restored}
+
+
+# =====================================================================
+# Feature #9 (Asset Delete) & #18 (SRT Subtitle Export)
+# =====================================================================
+
+def delete_asset_file(kind: str, filename: str) -> bool:
+    """Safely delete a user-uploaded asset file by category."""
+    from .config import CUSTOM_FONTS_DIR, LOGOS_DIR
+
+    dir_map = {
+        "music": MUSIC_DIR,
+        "avatars": AVATARS_DIR,
+        "ads": ADS_DIR,
+        "satisfying": SATISFYING_DIR,
+        "outros": OUTROS_DIR,
+        "logos": LOGOS_DIR,
+        "fonts": CUSTOM_FONTS_DIR,
+    }
+    target_dir = dir_map.get(kind)
+    if not target_dir:
+        return False
+    safe_name = Path(filename).name
+    if not safe_name or safe_name in (".", ".."):
+        return False
+    p = target_dir / safe_name
+    if p.exists() and p.is_file():
+        p.unlink(missing_ok=True)
+        return True
+    return False
+
+
+def _fmt_srt_ts(sec: float) -> str:
+    s = max(0.0, float(sec))
+    h = int(s // 3600)
+    m = int((s % 3600) // 60)
+    rem = s % 60
+    whole = int(rem)
+    ms = int(round((rem - whole) * 1000))
+    if ms >= 1000:
+        whole += 1
+        ms = 0
+    return f"{h:02d}:{m:02d}:{whole:02d},{ms:03d}"
+
+
+def build_clip_srt(words: List[Dict[str, Any]], clip_start: float, clip_end: float, fallback_text: str = "") -> str:
+    """Feature #18 (v3.1): Generate clean time-aligned .SRT subtitles for CapCut / Premiere Pro."""
+    rel_words = []
+    for w in words or []:
+        ws = float(w.get("start", 0.0))
+        we = float(w.get("end", ws + 0.25))
+        if we >= clip_start and ws <= clip_end:
+            rel_words.append({
+                "word": str(w.get("word", "")).strip(),
+                "start": max(0.0, ws - clip_start),
+                "end": max(0.05, min(clip_end - clip_start, we - clip_start)),
+            })
+    rel_words = [w for w in rel_words if w["word"]]
+
+    if not rel_words:
+        txt = (fallback_text or "").strip() or "Без субтитров"
+        dur = max(2.0, float(clip_end) - float(clip_start))
+        return f"1\n00:00:00,000 --> {_fmt_srt_ts(dur)}\n{txt}\n"
+
+    # Group into crisp 3-5 word chunks
+    lines: List[str] = []
+    idx = 1
+    chunk: List[Dict[str, Any]] = []
+    for w in rel_words:
+        if chunk and (len(chunk) >= 4 or (w["start"] - chunk[-1]["end"]) > 0.65):
+            lines.append(f"{idx}\n{_fmt_srt_ts(chunk[0]['start'])} --> {_fmt_srt_ts(chunk[-1]['end'])}\n{' '.join(x['word'] for x in chunk)}\n")
+            idx += 1
+            chunk = []
+        chunk.append(w)
+    if chunk:
+        lines.append(f"{idx}\n{_fmt_srt_ts(chunk[0]['start'])} --> {_fmt_srt_ts(chunk[-1]['end'])}\n{' '.join(x['word'] for x in chunk)}\n")
+    return "\n".join(lines)

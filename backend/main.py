@@ -23,9 +23,11 @@ from backend.config import (
     ADS_DIR,
     AVATARS_DIR,
     BASE_DIR,
+    CUSTOM_FONTS_DIR,
     EXPORTS_DIR,
     FONTS_DIR,
     JOBS_DIR,
+    LOGOS_DIR,
     MUSIC_DIR,
     OUTROS_DIR,
     SATISFYING_DIR,
@@ -48,15 +50,18 @@ from backend.pipeline import (
     delete_job,
     export_job_to_account_folder,
     get_batch_status,
+    get_clip_srt,
     get_job,
     get_job_hype_timeline,
     get_studio_dashboard_stats,
     list_jobs,
     load_existing_jobs,
     mark_clip_published,
+    multi_render_clip_for_accounts,
     rerender_single_clip,
     start_batch_urls,
     start_processing,
+    toggle_clip_favorite,
     update_clip_title,
 )
 from backend.remote import _apply_network_opts, probe_remote_url
@@ -67,6 +72,7 @@ from backend.studio_extras import (
     cleanup_old_sources,
     cleanup_temp_cache,
     create_studio_backup_zip,
+    delete_asset_file,
     delete_plan_item,
     get_disk_usage_stats,
     list_plan_items,
@@ -124,6 +130,7 @@ class ProcessRequest(BaseModel):
     hook_font_size: str = Field(default="medium")
     watermark_text: Optional[str] = Field(default=None)
     watermark_opacity: float = Field(default=0.55, ge=0.15, le=1.0)
+    watermark_logo_id: Optional[str] = Field(default=None)
     jump_cuts: bool = Field(default=False)
     bg_music_id: Optional[str] = Field(default=None)
     bg_music_volume: float = Field(default=0.18, ge=0.05, le=0.5)
@@ -173,6 +180,7 @@ class RerenderRequest(BaseModel):
     hook_font_size: str = Field(default="medium")
     watermark_text: Optional[str] = Field(default=None)
     watermark_opacity: float = Field(default=0.55, ge=0.15, le=1.0)
+    watermark_logo_id: Optional[str] = Field(default=None)
     jump_cuts: bool = Field(default=False)
     bg_music_id: Optional[str] = Field(default=None)
     bg_music_volume: float = Field(default=0.18, ge=0.05, le=0.5)
@@ -219,6 +227,7 @@ class SettingsUpdateRequest(BaseModel):
     tg_bot_token: Optional[str] = None
     tg_chat_id: Optional[str] = None
     tg_auto_send: Optional[bool] = None
+    favorite_streamers: Optional[List[str]] = None
 
 
 @app.get("/api/settings")
@@ -247,6 +256,8 @@ def api_save_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
         updates["tg_chat_id"] = req.tg_chat_id.strip()
     if req.tg_auto_send is not None:
         updates["tg_auto_send"] = bool(req.tg_auto_send)
+    if req.favorite_streamers is not None:
+        updates["favorite_streamers"] = [s.strip().lower() for s in req.favorite_streamers if s and s.strip()][:20]
     return save_settings(updates)
 
 
@@ -1319,3 +1330,149 @@ def api_telegram_sync_pull() -> Dict[str, Any]:
         "ui_preset": bundle.get("ui_preset") or {},
         "message": "☁️ Настройки, аккаунты и контент-план успешно синхронизированы из Telegram!",
     }
+
+
+# =====================================================================
+# v3.1.0 Endpoints: yt-dlp Update (#7), Asset Delete (#9), Favorite (#12),
+# PNG Logos & Custom Fonts (#14), Multi-Account Render (#15),
+# Streamer Monitor (#17), SRT Export (#18)
+# =====================================================================
+
+@app.post("/api/system/update-ytdlp")
+def api_update_ytdlp() -> Dict[str, Any]:
+    import subprocess
+    import sys
+
+    if getattr(sys, "frozen", False):
+        return {
+            "ok": False,
+            "message": "В собранном приложении yt-dlp обновляется через кнопку «Обновления» сверху (OTA).",
+        }
+    try:
+        res = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=90,
+        )
+        if res.returncode == 0:
+            return {"ok": True, "message": "✅ yt-dlp успешно обновлён! Перезапустите приложение."}
+        return {"ok": False, "message": f"Не удалось обновить: {res.stderr[-180:]}"}
+    except Exception as exc:
+        return {"ok": False, "message": f"Ошибка обновления: {exc}"}
+
+
+@app.delete("/api/assets/{kind}/{filename}")
+def api_delete_asset(kind: str, filename: str) -> Dict[str, Any]:
+    if not delete_asset_file(kind, filename):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    return {"ok": True}
+
+
+@app.get("/api/logos")
+def api_list_logos() -> Dict[str, Any]:
+    items = []
+    for f in sorted(LOGOS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.is_file() and f.suffix.lower() in (".png", ".webp", ".jpg", ".jpeg"):
+            items.append({"id": f.name, "name": f.stem})
+    return {"items": items}
+
+
+@app.post("/api/logos")
+async def api_upload_logo(file: UploadFile = File(...)) -> Dict[str, Any]:
+    ext = Path(file.filename or "logo.png").suffix.lower()
+    if ext not in (".png", ".webp", ".jpg", ".jpeg"):
+        raise HTTPException(status_code=400, detail="Поддерживаются PNG, WEBP, JPG")
+    safe_stem = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ_-]+", "_", Path(file.filename or "logo").stem)[:32] or "logo"
+    fname = f"{safe_stem}_{uuid.uuid4().hex[:6]}{ext}"
+    dest = LOGOS_DIR / fname
+    with dest.open("wb") as out:
+        shutil.copyfileobj(file.file, out)
+    return {"id": fname, "name": safe_stem}
+
+
+@app.get("/api/logos/{filename}")
+def api_get_logo(filename: str) -> FileResponse:
+    p = LOGOS_DIR / Path(filename).name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Логотип не найден")
+    return FileResponse(path=str(p))
+
+
+@app.post("/api/custom-fonts")
+async def api_upload_custom_font(file: UploadFile = File(...)) -> Dict[str, Any]:
+    ext = Path(file.filename or "font.ttf").suffix.lower()
+    if ext not in (".ttf", ".otf"):
+        raise HTTPException(status_code=400, detail="Поддерживаются только шрифты .TTF и .OTF")
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", Path(file.filename or "font").stem)[:32] or "custom_font"
+    fname = f"{safe_stem}_{uuid.uuid4().hex[:5]}{ext}"
+    dest = CUSTOM_FONTS_DIR / fname
+    with dest.open("wb") as out:
+        shutil.copyfileobj(file.file, out)
+    return {"id": f"custom:{fname}", "name": safe_stem, "fonts": get_available_fonts()}
+
+
+@app.get("/api/custom-fonts/{filename}")
+def api_get_custom_font(filename: str) -> FileResponse:
+    p = CUSTOM_FONTS_DIR / Path(filename).name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Шрифт не найден")
+    return FileResponse(path=str(p))
+
+
+@app.patch("/api/jobs/{job_id}/clips/{clip_id}/favorite")
+def api_toggle_favorite(job_id: str, clip_id: str) -> Dict[str, Any]:
+    updated = toggle_clip_favorite(job_id, clip_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Клип не найден")
+    return updated
+
+
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/multi-render")
+def api_multi_render_clip(job_id: str, clip_id: str, req: RerenderRequest) -> Dict[str, Any]:
+    try:
+        return multi_render_clip_for_accounts(job_id, clip_id, req.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка мульти-рендера: {exc}")
+
+
+@app.get("/api/jobs/{job_id}/clips/{clip_id}/srt")
+def api_export_clip_srt(job_id: str, clip_id: str) -> Response:
+    try:
+        srt_text = get_clip_srt(job_id, clip_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return Response(
+        content=srt_text.encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{clip_id}.srt"'},
+    )
+
+
+class MonitorStreamersRequest(BaseModel):
+    streamers: List[str]
+    period: str = Field(default="24h")
+
+
+@app.post("/api/twitch-clips/monitor")
+def api_monitor_favorite_streamers(req: MonitorStreamersRequest) -> Dict[str, Any]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    logins = [s.strip().lower() for s in req.streamers if s and s.strip()][:15]
+    if not logins:
+        raise HTTPException(status_code=400, detail="Добавьте хотя бы одного стримера")
+
+    all_clips: List[Dict[str, Any]] = []
+
+    def _fetch(lg: str) -> List[Dict[str, Any]]:
+        try:
+            return fetch_twitch_top_clips(lg, period=req.period, limit=5)
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for res in pool.map(_fetch, logins):
+            all_clips.extend(res)
+
+    all_clips.sort(key=lambda c: int(c.get("views") or 0), reverse=True)
+    return {"clips": all_clips[:24], "count": len(all_clips[:24])}
