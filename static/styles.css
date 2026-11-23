@@ -1941,3 +1941,92 @@ input[type="range"] {
   gap: 8px;
   margin-top: 12px;
 }
+
+/* === v2.4.0: Clean 4-Tab Studio UI Redesign === */
+.studio-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding: 5px;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+}
+.studio-tab {
+  padding: 9px 8px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.studio-tab:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+.studio-tab.active {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(124, 92, 255, 0.32), rgba(255, 46, 147, 0.24));
+  border-color: rgba(124, 92, 255, 0.55);
+  box-shadow: 0 4px 14px rgba(124, 92, 255, 0.2);
+}
+.studio-tab-pane {
+  animation: fadeInTab 0.16s ease;
+}
+@keyframes fadeInTab {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.clean-details {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+}
+.clean-details summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  color: #cdd5ee;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.clean-details summary::after {
+  content: '▾';
+  font-size: 12px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.clean-details[open] summary::after {
+  transform: rotate(180deg);
+}
+
+.studio-cta-bar {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.panel-preview {
+  position: sticky;
+  top: 76px;
+  align-self: start;
+}
+
+@media (max-width: 720px) {
+  .studio-tabs {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

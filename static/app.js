@@ -2755,6 +2755,19 @@
     });
   }
 
+  // v2.4.0 Clean 4-Tab Studio Settings Navigation
+  const studioTabsEl = document.getElementById('studioTabs');
+  if (studioTabsEl) {
+    const panes = document.querySelectorAll('.studio-tab-pane');
+    studioTabsEl.querySelectorAll('.studio-tab').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.dataset.stab;
+        studioTabsEl.querySelectorAll('.studio-tab').forEach((b) => b.classList.toggle('active', b === btn));
+        panes.forEach((p) => p.classList.toggle('hidden', p.dataset.spane !== target));
+      });
+    });
+  }
+
   refreshOutrosList();
   init();
 })();

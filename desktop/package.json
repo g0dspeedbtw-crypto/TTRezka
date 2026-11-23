@@ -1,7 +1,7 @@
 {
   "name": "tikcut-studio",
   "productName": "TikCut Studio",
-  "version": "2.3.2",
+  "version": "2.4.0",
   "author": "TikCut Studio",
   "description": "Локальное десктопное приложение для TikTok нарезок 9:16 с ИИ-анализом и авто-субтитрами",
   "main": "main.js",

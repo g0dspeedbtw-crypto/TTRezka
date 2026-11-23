@@ -113,33 +113,9 @@
           </div>
 
           <div class="batch-queue-wrap">
-            <div class="music-row" style="flex-wrap: wrap;">
-              <button id="btnToggleBatch" type="button" class="btn btn-ghost btn-sm">
-                📥 Пакетная очередь ссылок (на ночь)
-              </button>
-              <button id="btnToggleNetOpts" type="button" class="btn btn-ghost btn-sm">
-                🌐 Прокси / Cookies (YouTube)
-              </button>
-            </div>
-            <div id="netOptsBox" class="sub-box hidden" style="margin-top: 8px;">
-              <div class="form-grid">
-                <div class="field">
-                  <label for="ytCookiesSelect">Cookies из браузера (от ошибки «Sign in / Bot»)</label>
-                  <select id="ytCookiesSelect">
-                    <option value="">Без cookies</option>
-                    <option value="chrome">Google Chrome</option>
-                    <option value="edge">Microsoft Edge</option>
-                    <option value="firefox">Mozilla Firefox</option>
-                    <option value="safari">Apple Safari</option>
-                    <option value="brave">Brave</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="ytProxyInput">Прокси (опционально, http:// или socks5://)</label>
-                  <input id="ytProxyInput" type="text" placeholder="http://user:pass@ip:port или socks5://..." autocomplete="off" />
-                </div>
-              </div>
-            </div>
+            <button id="btnToggleBatch" type="button" class="btn btn-ghost btn-sm">
+              📥 Пакетная очередь ссылок (на ночь)
+            </button>
             <div id="batchQueueBox" class="sub-box hidden" style="margin-top: 8px;">
               <div class="field">
                 <label for="batchUrlsInput">Вставьте до 15 ссылок (по одной на строку) — обработаются подряд с текущими настройками</label>
@@ -188,7 +164,7 @@
         <div class="divider"></div>
 
         <div class="card-header">
-          <h2>2. Настройки нарезки и субтитров</h2>
+          <h2>2. Настройки студии</h2>
           <div class="preset-io-actions">
             <button id="btnExportPresetJson" type="button" class="btn btn-ghost btn-sm" title="Скачать текущие настройки в JSON">⬇ JSON</button>
             <input id="importPresetJsonInput" type="file" accept=".json,application/json" hidden />
@@ -196,285 +172,199 @@
           </div>
         </div>
 
-        <div class="preset-library-bar" id="presetLibraryBar">
-          <span class="preset-lib-label">📦 Ниши под ключ:</span>
-          <button type="button" class="preset-chip" data-preset="streamer">🎮 Игровой Twitch</button>
-          <button type="button" class="preset-chip" data-preset="irl">📸 IRL / Стрим</button>
-          <button type="button" class="preset-chip" data-preset="podcast">🎙 Подкаст</button>
-          <button type="button" class="preset-chip" data-preset="cinema">🎬 Кино-нарезки</button>
-          <button type="button" class="preset-chip" data-preset="hormozi">💰 Крипта / Хормози</button>
-          <button type="button" class="preset-chip" data-preset="minimal">✨ Минимал Reels</button>
-          <button type="button" class="preset-chip" data-preset="brainrot">🧠 Brainrot</button>
+        <!-- Clean 4-Tab Studio Settings Navigation -->
+        <div class="studio-tabs" id="studioTabs">
+          <button type="button" class="studio-tab active" data-stab="main">🎬 Основное</button>
+          <button type="button" class="studio-tab" data-stab="style">💬 Титры и стиль</button>
+          <button type="button" class="studio-tab" data-stab="effects">⚡ Эффекты и реклама</button>
+          <button type="button" class="studio-tab" data-stab="system">⚙️ ИИ и система</button>
         </div>
 
-        <div class="form-grid">
-          <div class="field">
-            <label for="clipCount">Количество клипов (до 30): <strong id="clipCountVal">6</strong></label>
-            <input id="clipCount" type="range" min="1" max="30" value="6" />
+        <!-- TAB 1: Основное (Ниши, длина, кадр 9:16, поиск моментов, ручные таймкоды) -->
+        <div class="studio-tab-pane" data-spane="main">
+          <div class="preset-library-bar" id="presetLibraryBar">
+            <span class="preset-lib-label">📦 Ниши:</span>
+            <button type="button" class="preset-chip" data-preset="streamer">🎮 Twitch</button>
+            <button type="button" class="preset-chip" data-preset="irl">📸 IRL</button>
+            <button type="button" class="preset-chip" data-preset="podcast">🎙 Подкаст</button>
+            <button type="button" class="preset-chip" data-preset="cinema">🎬 Кино</button>
+            <button type="button" class="preset-chip" data-preset="hormozi">💰 Хормози</button>
+            <button type="button" class="preset-chip" data-preset="minimal">✨ Минимал</button>
+            <button type="button" class="preset-chip" data-preset="brainrot">🧠 Brainrot</button>
           </div>
 
-          <div class="field">
-            <label for="whisperModel">Точность распознавания (Whisper RU)</label>
-            <select id="whisperModel">
-              <option value="tiny">Tiny — сверхбыстро (черновик)</option>
-              <option value="base">Base — быстро</option>
-              <option value="small" selected>Small — оптимально (CPU)</option>
-              <option value="medium">Medium — высокая точность</option>
-              <option value="large-v3-turbo">⚡ Large-v3-Turbo — RTX CUDA (макс. качество)</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label for="minDuration">Мин. длина клипа (сек)</label>
-            <input id="minDuration" type="number" min="8" max="90" value="20" />
-          </div>
-
-          <div class="field">
-            <label for="maxDuration">Макс. длина клипа (сек)</label>
-            <input id="maxDuration" type="number" min="15" max="120" value="55" />
-          </div>
-        </div>
-
-        <div class="field-group">
-          <label>Формат кадра 9:16</label>
-          <div class="segmented four-col" id="cropModeGroup">
-            <button type="button" class="seg-btn active" data-value="fill">
-              📱 Заполнение
-            </button>
-            <button type="button" class="seg-btn" data-value="face_track">
-              🤖 Face Track
-            </button>
-            <button type="button" class="seg-btn" data-value="split_stream">
-              🎮 Стрим Split
-            </button>
-            <button type="button" class="seg-btn" data-value="blur_bg">
-              🌫 Размытый фон
-            </button>
-          </div>
-        </div>
-
-        <div id="splitStreamSettings" class="sub-box hidden">
-          <div class="switch-grid" style="margin-bottom: 12px;">
-            <label class="switch-item">
-              <span class="switch-label">🖼️ Фото вместо вебки стримера</span>
-              <span class="switch"><input id="useWebcamPhotoToggle" type="checkbox" /><span class="slider"></span></span>
-            </label>
-          </div>
-          <div id="webcamPhotoRow" class="field hidden">
-            <label for="webcamPhotoSelect">Выберите или загрузите фото стримера (PNG / JPG)</label>
-            <div class="music-row">
-              <select id="webcamPhotoSelect">
-                <option value="">Фото не выбрано</option>
-              </select>
-              <input id="avatarFileInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden />
-              <button id="btnUploadAvatar" type="button" class="btn btn-secondary btn-sm">+ Фото</button>
-            </div>
-          </div>
-          <div id="webcamCropRow" class="form-grid">
+          <div class="form-grid">
             <div class="field">
-              <label for="webcamCorner">Где находится веб-камера стримера?</label>
-              <select id="webcamCorner">
-                <option value="bottom_left" selected>Нижний левый угол</option>
-                <option value="bottom_right">Нижний правый угол</option>
-                <option value="top_left">Верхний левый угол</option>
-                <option value="top_right">Верхний правый угол</option>
+              <label for="clipCount">Количество клипов: <strong id="clipCountVal">6</strong></label>
+              <input id="clipCount" type="range" min="1" max="30" value="6" />
+            </div>
+
+            <div class="field">
+              <label for="whisperModel">Модель речи (Whisper RU)</label>
+              <select id="whisperModel">
+                <option value="tiny">Tiny — сверхбыстро (черновик)</option>
+                <option value="base">Base — быстро</option>
+                <option value="small" selected>Small — оптимально (CPU)</option>
+                <option value="medium">Medium — высокая точность</option>
+                <option value="large-v3-turbo">⚡ Large-v3-Turbo — RTX CUDA (макс. качество)</option>
               </select>
             </div>
+
             <div class="field">
-              <label for="webcamSize">Размер области вебки: <strong id="webcamSizeVal">28%</strong></label>
-              <input id="webcamSize" type="range" min="18" max="42" value="28" />
+              <label for="minDuration">Мин. длина (сек)</label>
+              <input id="minDuration" type="number" min="8" max="90" value="20" />
             </div>
-            <div class="field" style="grid-column: 1 / -1;">
-              <div class="music-row" style="flex-wrap: wrap;">
-                <button id="btnOpenWebcamCrop" type="button" class="btn btn-secondary btn-sm">
-                  📐 Выделить вебку мышкой на кадре
-                </button>
-                <span id="webcamRectBadge" class="badge hidden">✅ Своя область задана</span>
-                <button id="btnResetWebcamRect" type="button" class="btn btn-ghost btn-sm hidden">Сбросить</button>
+
+            <div class="field">
+              <label for="maxDuration">Макс. длина (сек)</label>
+              <input id="maxDuration" type="number" min="15" max="120" value="55" />
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label>Формат кадра 9:16</label>
+            <div class="segmented four-col" id="cropModeGroup">
+              <button type="button" class="seg-btn active" data-value="fill">📱 Заполнение</button>
+              <button type="button" class="seg-btn" data-value="face_track">🤖 Face Track</button>
+              <button type="button" class="seg-btn" data-value="split_stream">🎮 Стрим Split</button>
+              <button type="button" class="seg-btn" data-value="blur_bg">🌫 Размытый фон</button>
+            </div>
+          </div>
+
+          <div id="splitStreamSettings" class="sub-box hidden">
+            <div class="switch-grid" style="margin-bottom: 10px;">
+              <label class="switch-item">
+                <span class="switch-label">🖼️ Фото вместо вебки стримера</span>
+                <span class="switch"><input id="useWebcamPhotoToggle" type="checkbox" /><span class="slider"></span></span>
+              </label>
+            </div>
+            <div id="webcamPhotoRow" class="field hidden">
+              <label for="webcamPhotoSelect">Фото стримера (PNG / JPG)</label>
+              <div class="music-row">
+                <select id="webcamPhotoSelect">
+                  <option value="">Фото не выбрано</option>
+                </select>
+                <input id="avatarFileInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden />
+                <button id="btnUploadAvatar" type="button" class="btn btn-secondary btn-sm">+ Фото</button>
+              </div>
+            </div>
+            <div id="webcamCropRow" class="form-grid">
+              <div class="field">
+                <label for="webcamCorner">Угол веб-камеры</label>
+                <select id="webcamCorner">
+                  <option value="bottom_left" selected>Нижний левый угол</option>
+                  <option value="bottom_right">Нижний правый угол</option>
+                  <option value="top_left">Верхний левый угол</option>
+                  <option value="top_right">Верхний правый угол</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="webcamSize">Размер вебки: <strong id="webcamSizeVal">28%</strong></label>
+                <input id="webcamSize" type="range" min="18" max="42" value="28" />
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <div class="music-row" style="flex-wrap: wrap;">
+                  <button id="btnOpenWebcamCrop" type="button" class="btn btn-secondary btn-sm">
+                    📐 Выделить вебку мышкой на кадре
+                  </button>
+                  <span id="webcamRectBadge" class="badge hidden">✅ Своя область задана</span>
+                  <button id="btnResetWebcamRect" type="button" class="btn btn-ghost btn-sm hidden">Сбросить</button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <div class="field-group">
-          <label>Стиль авто-субтитров</label>
-          <div id="styleCards" class="style-cards"></div>
-        </div>
-
-        <div class="form-grid three-col">
-          <div class="field">
-            <label for="fontSelect">Шрифт субтитров</label>
-            <select id="fontSelect"></select>
+          <div class="pro-box">
+            <div class="pro-box-title">🎯 Критерии поиска лучших моментов</div>
+            <div class="switch-grid">
+              <label class="switch-item">
+                <span class="switch-label">💬 Активность чата</span>
+                <span class="switch"><input id="searchChatToggle" type="checkbox" checked /><span class="slider"></span></span>
+              </label>
+              <label class="switch-item">
+                <span class="switch-label">😂 Смех стримера</span>
+                <span class="switch"><input id="searchLaughterToggle" type="checkbox" checked /><span class="slider"></span></span>
+              </label>
+              <label class="switch-item">
+                <span class="switch-label">📢 Крики / эмоции</span>
+                <span class="switch"><input id="searchScreamsToggle" type="checkbox" checked /><span class="slider"></span></span>
+              </label>
+              <label class="switch-item">
+                <span class="switch-label">🧠 ИИ-режиссёр</span>
+                <span class="switch"><input id="useAiDirectorToggle" type="checkbox" checked /><span class="slider"></span></span>
+              </label>
+            </div>
           </div>
 
-          <div class="field">
-            <label for="fontSize">Размер текста</label>
-            <select id="fontSize">
-              <option value="small">Компактный</option>
-              <option value="medium" selected>Стандартный</option>
-              <option value="large">Крупный</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label for="subPosition">Позиция</label>
-            <select id="subPosition">
-              <option value="center">По центру</option>
-              <option value="lower_third" selected>Нижняя треть (TikTok)</option>
-              <option value="bottom">Внизу</option>
-            </select>
-          </div>
+          <details class="clean-details">
+            <summary>✂️ Вырезать по своим таймкодам (опционально)</summary>
+            <div class="field" style="margin-top: 8px;">
+              <textarea id="manualTimecodesInput" rows="2" placeholder="12:40-13:25 Смешной момент&#10;45:10-46:00 Жесткий клатч"></textarea>
+            </div>
+          </details>
         </div>
 
-        <div class="pro-box">
-          <div class="pro-box-title">🎛 Тумблеры поиска моментов, титров и эффектов</div>
-          <div class="switch-grid">
+        <!-- TAB 2: Титры и стиль -->
+        <div class="studio-tab-pane hidden" data-spane="style">
+          <div class="switch-grid" style="margin-bottom: 14px;">
             <label class="switch-item">
               <span class="switch-label">💬 Авто-субтитры</span>
               <span class="switch"><input id="enableSubtitlesToggle" type="checkbox" checked /><span class="slider"></span></span>
             </label>
             <label class="switch-item">
-              <span class="switch-label">🏷 Заголовок-хук под момент</span>
-              <span class="switch"><input id="hookBannerToggle" type="checkbox" checked /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">💬 Поиск по активности чата</span>
-              <span class="switch"><input id="searchChatToggle" type="checkbox" checked /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">😂 Поиск по смеху стримера</span>
-              <span class="switch"><input id="searchLaughterToggle" type="checkbox" checked /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">📢 Поиск по крикам / эмоциям</span>
-              <span class="switch"><input id="searchScreamsToggle" type="checkbox" checked /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">🧠 ИИ-режиссёр (Gemini/Ollama)</span>
-              <span class="switch"><input id="useAiDirectorToggle" type="checkbox" checked /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">ЗАГЛАВНЫЕ БУКВЫ (CAPS)</span>
+              <span class="switch-label">ЗАГЛАВНЫЕ (CAPS)</span>
               <span class="switch"><input id="uppercaseToggle" type="checkbox" checked /><span class="slider"></span></span>
             </label>
             <label class="switch-item">
-              <span class="switch-label">✂️ Jump-Cuts (убрать паузы)</span>
-              <span class="switch"><input id="jumpCutsToggle" type="checkbox" /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">⚡ 60 FPS (игры / RTX)</span>
-              <span class="switch"><input id="fps60Toggle" type="checkbox" /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">🎨 Сочность и резкость</span>
-              <span class="switch"><input id="videoEnhanceToggle" type="checkbox" /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">📢 Рекламный баннер</span>
-              <span class="switch"><input id="adBannerToggle" type="checkbox" /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">🎮 Залипательное видео снизу</span>
-              <span class="switch"><input id="satisfyingToggle" type="checkbox" /><span class="slider"></span></span>
+              <span class="switch-label">🏷 Заголовок-хук</span>
+              <span class="switch"><input id="hookBannerToggle" type="checkbox" checked /><span class="slider"></span></span>
             </label>
             <label class="switch-item">
               <span class="switch-label">🖼 Авто-обложка (1-й кадр)</span>
               <span class="switch"><input id="autoCoverToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
-            <label class="switch-item">
-              <span class="switch-label">🔄 Уникализатор (Anti-Duplicate)</span>
-              <span class="switch"><input id="uniquifyToggle" type="checkbox" /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">🎬 Аутро (CTA в конце клипа)</span>
-              <span class="switch"><input id="outroToggle" type="checkbox" /><span class="slider"></span></span>
-            </label>
-            <label class="switch-item">
-              <span class="switch-label">🌡️ Тихий фон (не нагружать ПК)</span>
-              <span class="switch"><input id="lowCpuToggle" type="checkbox" /><span class="slider"></span></span>
-            </label>
           </div>
 
-          <div class="sub-box" style="margin-bottom: 12px;">
-            <div class="music-row" style="flex-wrap: wrap;">
-              <button id="btnOpenBlurBox" type="button" class="btn btn-secondary btn-sm">
-                🌫️ Замазать область на экране (чужой баннер / ник / чат)
-              </button>
-              <span id="blurRectBadge" class="badge hidden">✅ Область цензуры задана</span>
-              <button id="btnResetBlurRect" type="button" class="btn btn-ghost btn-sm hidden">Сбросить</button>
-            </div>
+          <div class="field-group">
+            <label>Стиль авто-субтитров</label>
+            <div id="styleCards" class="style-cards"></div>
           </div>
 
-          <div id="outroBox" class="sub-box hidden" style="margin-bottom: 12px;">
+          <div class="form-grid three-col">
             <div class="field">
-              <label for="outroSelect">🎬 Файл аутро-хвоста (MP4 / MOV 1–3 сек или картинка PNG/JPG «Подпишись 👇»)</label>
-              <div class="music-row">
-                <select id="outroSelect">
-                  <option value="">Аутро не выбрано</option>
-                </select>
-                <input id="outroFileInput" type="file" accept="video/*,image/png,image/jpeg,image/webp,.mp4,.mov,.webm,.png,.jpg,.jpeg,.webp" hidden />
-                <button id="btnUploadOutro" type="button" class="btn btn-secondary btn-sm">+ Аутро</button>
-              </div>
+              <label for="fontSelect">Шрифт</label>
+              <select id="fontSelect"></select>
             </div>
-          </div>
-
-          <div id="satisfyingBox" class="sub-box hidden" style="margin-bottom: 12px;">
             <div class="field">
-              <label for="satisfyingSelect">🎮 Нижнее залипательное видео (GTA / Subway Surfers / Minecraft MP4)</label>
-              <div class="music-row">
-                <select id="satisfyingSelect">
-                  <option value="">Видео не выбрано</option>
-                </select>
-                <input id="satisfyingFileInput" type="file" accept="video/*,.mp4,.mov,.mkv,.webm" hidden />
-                <button id="btnUploadSatisfying" type="button" class="btn btn-secondary btn-sm">+ Залипашка</button>
-              </div>
-            </div>
-          </div>
-
-          <div id="adBannerBox" class="sub-box hidden" style="margin-bottom: 12px;">
-            <div class="pro-box-title">📢 Настройка рекламного баннера</div>
-            <div class="field" style="margin-bottom: 10px;">
-              <label for="adModeSelect">Формат показа рекламы</label>
-              <select id="adModeSelect">
-                <option value="bottom_overlay" selected>📌 Внизу на весь ролик (аккуратно, не перекрывает)</option>
-                <option value="midroll_pause">⏸ Посреди ролика по центру + Пауза + Своя озвучка</option>
+              <label for="fontSize">Размер</label>
+              <select id="fontSize">
+                <option value="small">Компактный</option>
+                <option value="medium" selected>Стандартный</option>
+                <option value="large">Крупный</option>
               </select>
             </div>
-            <div class="form-grid">
-              <div class="field">
-                <label for="adBannerSelect">Картинка или GIF баннера (PNG / JPG / GIF)</label>
-                <div class="music-row">
-                  <select id="adBannerSelect">
-                    <option value="">Баннер не выбран</option>
-                  </select>
-                  <input id="adBannerFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" hidden />
-                  <button id="btnUploadAdBanner" type="button" class="btn btn-secondary btn-sm">+ Баннер / GIF</button>
-                </div>
-              </div>
-              <div class="field hidden" id="adAudioRow">
-                <label for="adAudioSelect">Озвучка паузы (MP3 / WAV — пауза ровно по длине)</label>
-                <div class="music-row">
-                  <select id="adAudioSelect">
-                    <option value="">Без озвучки (пауза 3.5 сек)</option>
-                  </select>
-                  <input id="adAudioFileInput" type="file" accept=".mp3,.wav,.m4a,.ogg" hidden />
-                  <button id="btnUploadAdAudio" type="button" class="btn btn-secondary btn-sm">+ Озвучка</button>
-                </div>
-              </div>
+            <div class="field">
+              <label for="subPosition">Позиция</label>
+              <select id="subPosition">
+                <option value="center">По центру</option>
+                <option value="lower_third" selected>Нижняя треть</option>
+                <option value="bottom">Внизу</option>
+              </select>
             </div>
           </div>
 
-          <div id="hookCustomBox" class="sub-box" style="margin-bottom: 12px;">
+          <div id="hookCustomBox" class="sub-box">
+            <div class="pro-box-title">🏷 Дизайн заголовка-хука</div>
             <div class="form-grid">
               <div class="field">
-                <label for="hookPositionSelect">Позиция заголовка-хука</label>
+                <label for="hookPositionSelect">Позиция заголовка</label>
                 <select id="hookPositionSelect">
-                  <option value="between" selected>Между вебкой/фото и видео (по центру)</option>
+                  <option value="between" selected>Между вебкой и видео (по центру)</option>
                   <option value="top">Сверху экрана (первые 4.5 сек)</option>
                 </select>
               </div>
               <div class="field">
-                <label for="hookFontSize">Размер шрифта заголовка</label>
+                <label for="hookFontSize">Размер шрифта</label>
                 <select id="hookFontSize">
                   <option value="small">Компактный</option>
                   <option value="medium" selected>Средний</option>
@@ -492,43 +382,115 @@
                 <input id="hookBgColor" type="color" value="#ffffff" />
               </label>
               <label class="color-pill">
-                <span>Рамка / Обводка</span>
+                <span>Рамка</span>
                 <input id="hookBorderColor" type="color" value="#ffe600" />
               </label>
-              <label class="switch-item" style="flex: 1; min-width: 170px;">
-                <span class="switch-label">Без фона (прозрачный)</span>
+              <label class="switch-item" style="flex: 1; min-width: 155px;">
+                <span class="switch-label">Без фона</span>
                 <span class="switch"><input id="hookTransparentBg" type="checkbox" /><span class="slider"></span></span>
               </label>
             </div>
           </div>
 
-          <div class="pro-box ai-comedy-box">
-            <div class="pro-box-title">🧠 ИИ-режиссёр смешных моментов (понимает юмор, иронию и панчлайны)</div>
-            <div class="form-grid">
-              <div class="field">
-                <label for="geminiKeyInput">
-                  Бесплатный Gemini API ключ (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">получить за 30 сек</a>)
-                </label>
-                <div class="music-row">
-                  <input id="geminiKeyInput" type="password" placeholder="AIza... или AQ.... (Gemini / Vertex AI)" autocomplete="off" />
-                  <button id="btnCheckGeminiKey" type="button" class="btn btn-secondary btn-sm">Проверить</button>
-                </div>
-                <div id="geminiKeyStatus" class="key-status hidden"></div>
-              </div>
-              <div class="field" id="ollamaRow">
-                <label for="ollamaSelect">Или локальный ИИ Ollama (на RTX 4060 Ti)</label>
-                <select id="ollamaSelect">
-                  <option value="">Ollama не запущен (команда: ollama run qwen2.5:7b)</option>
+          <div class="field" style="margin-top: 12px;">
+            <label for="watermarkInput">Водяной знак канала (@ник)</label>
+            <input id="watermarkInput" type="text" placeholder="Например: @ttrezka" maxlength="36" />
+          </div>
+        </div>
+
+        <!-- TAB 3: Эффекты и реклама -->
+        <div class="studio-tab-pane hidden" data-spane="effects">
+          <div class="switch-grid" style="margin-bottom: 14px;">
+            <label class="switch-item">
+              <span class="switch-label">✂️ Jump-Cuts (без пауз)</span>
+              <span class="switch"><input id="jumpCutsToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">⚡ 60 FPS (плавность)</span>
+              <span class="switch"><input id="fps60Toggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">🎨 Сочность и резкость</span>
+              <span class="switch"><input id="videoEnhanceToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">🔄 Уникализатор</span>
+              <span class="switch"><input id="uniquifyToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">🎮 Залипашка снизу</span>
+              <span class="switch"><input id="satisfyingToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">📢 Рекламный баннер</span>
+              <span class="switch"><input id="adBannerToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">🎬 Аутро (CTA в конце)</span>
+              <span class="switch"><input id="outroToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+          </div>
+
+          <div id="satisfyingBox" class="sub-box hidden" style="margin-bottom: 12px;">
+            <div class="field">
+              <label for="satisfyingSelect">🎮 Залипательное видео снизу (GTA / Subway Surfers / Minecraft)</label>
+              <div class="music-row">
+                <select id="satisfyingSelect">
+                  <option value="">Видео не выбрано</option>
                 </select>
+                <input id="satisfyingFileInput" type="file" accept="video/*,.mp4,.mov,.mkv,.webm" hidden />
+                <button id="btnUploadSatisfying" type="button" class="btn btn-secondary btn-sm">+ Залипашка</button>
               </div>
             </div>
           </div>
 
-          <div class="form-grid">
-            <div class="field">
-              <label for="watermarkInput">Водяной знак канала (@ник)</label>
-              <input id="watermarkInput" type="text" placeholder="Например: @ttrezka" maxlength="36" />
+          <div id="adBannerBox" class="sub-box hidden" style="margin-bottom: 12px;">
+            <div class="pro-box-title">📢 Настройка рекламного баннера</div>
+            <div class="field" style="margin-bottom: 10px;">
+              <label for="adModeSelect">Формат показа рекламы</label>
+              <select id="adModeSelect">
+                <option value="bottom_overlay" selected>📌 Внизу на весь ролик (аккуратно)</option>
+                <option value="midroll_pause">⏸ Посреди ролика по центру + Пауза + Озвучка</option>
+              </select>
             </div>
+            <div class="form-grid">
+              <div class="field">
+                <label for="adBannerSelect">Баннер или GIF (PNG / JPG / GIF)</label>
+                <div class="music-row">
+                  <select id="adBannerSelect">
+                    <option value="">Баннер не выбран</option>
+                  </select>
+                  <input id="adBannerFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" hidden />
+                  <button id="btnUploadAdBanner" type="button" class="btn btn-secondary btn-sm">+ Баннер</button>
+                </div>
+              </div>
+              <div class="field hidden" id="adAudioRow">
+                <label for="adAudioSelect">Озвучка паузы (MP3 / WAV)</label>
+                <div class="music-row">
+                  <select id="adAudioSelect">
+                    <option value="">Без озвучки (пауза 3.5с)</option>
+                  </select>
+                  <input id="adAudioFileInput" type="file" accept=".mp3,.wav,.m4a,.ogg" hidden />
+                  <button id="btnUploadAdAudio" type="button" class="btn btn-secondary btn-sm">+ Озвучка</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="outroBox" class="sub-box hidden" style="margin-bottom: 12px;">
+            <div class="field">
+              <label for="outroSelect">🎬 Аутро-хвост (MP4/MOV 1–3с или PNG/JPG «Подпишись 👇»)</label>
+              <div class="music-row">
+                <select id="outroSelect">
+                  <option value="">Аутро не выбрано</option>
+                </select>
+                <input id="outroFileInput" type="file" accept="video/*,image/png,image/jpeg,image/webp,.mp4,.mov,.webm,.png,.jpg,.jpeg,.webp" hidden />
+                <button id="btnUploadOutro" type="button" class="btn btn-secondary btn-sm">+ Аутро</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sub-box" style="margin-bottom: 12px;">
             <div class="field">
               <label for="bgMusicSelect">🎵 Фоновая музыка (авто-приглушение)</label>
               <div class="music-row">
@@ -540,18 +502,76 @@
               </div>
             </div>
           </div>
-        </div>
 
-        <div class="sub-box" style="margin: 12px 0;">
-          <div class="field">
-            <label for="manualTimecodesInput">✂️ Ручные таймкоды (необязательно — если заполнить, вырежет ровно их вместо автопоиска)</label>
-            <textarea id="manualTimecodesInput" rows="2" placeholder="Например:&#10;12:40-13:25 Смешной момент&#10;45:10-46:00 Жесткий клатч"></textarea>
+          <div class="sub-box">
+            <div class="music-row" style="flex-wrap: wrap;">
+              <button id="btnOpenBlurBox" type="button" class="btn btn-secondary btn-sm">
+                🌫️ Замазать область на экране (чужой баннер / ник / чат)
+              </button>
+              <span id="blurRectBadge" class="badge hidden">✅ Область цензуры задана</span>
+              <button id="btnResetBlurRect" type="button" class="btn btn-ghost btn-sm hidden">Сбросить</button>
+            </div>
           </div>
         </div>
 
-        <button id="btnStart" type="button" class="btn btn-primary btn-lg" disabled>
-          ⚡ Найти лучшие моменты и нарезать 9:16
-        </button>
+        <!-- TAB 4: ИИ и система -->
+        <div class="studio-tab-pane hidden" data-spane="system">
+          <div class="pro-box ai-comedy-box" style="margin-bottom: 12px;">
+            <div class="pro-box-title">🧠 ИИ-режиссёр (опционально — без него тоже всё работает локально)</div>
+            <div class="form-grid">
+              <div class="field">
+                <label for="geminiKeyInput">
+                  Gemini API ключ (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">получить бесплатно</a>)
+                </label>
+                <div class="music-row">
+                  <input id="geminiKeyInput" type="password" placeholder="AIza... или AQ...." autocomplete="off" />
+                  <button id="btnCheckGeminiKey" type="button" class="btn btn-secondary btn-sm">Проверить</button>
+                </div>
+                <div id="geminiKeyStatus" class="key-status hidden"></div>
+              </div>
+              <div class="field" id="ollamaRow">
+                <label for="ollamaSelect">Локальный ИИ Ollama</label>
+                <select id="ollamaSelect">
+                  <option value="">Ollama не запущен (ollama run qwen2.5:7b)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="sub-box" style="margin-bottom: 12px;">
+            <div class="pro-box-title">🌐 YouTube / Twitch: Cookies и Прокси</div>
+            <div class="form-grid">
+              <div class="field">
+                <label for="ytCookiesSelect">Cookies из браузера (от ошибки «Sign in / Bot»)</label>
+                <select id="ytCookiesSelect">
+                  <option value="">Без cookies</option>
+                  <option value="chrome">Google Chrome</option>
+                  <option value="edge">Microsoft Edge</option>
+                  <option value="firefox">Mozilla Firefox</option>
+                  <option value="safari">Apple Safari</option>
+                  <option value="brave">Brave</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="ytProxyInput">Прокси (опционально, http:// или socks5://)</label>
+                <input id="ytProxyInput" type="text" placeholder="http://user:pass@ip:port" autocomplete="off" />
+              </div>
+            </div>
+          </div>
+
+          <div class="switch-grid">
+            <label class="switch-item">
+              <span class="switch-label">🌡️ Тихий фон (меньше нагрузки на ПК при рендере)</span>
+              <span class="switch"><input id="lowCpuToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="studio-cta-bar">
+          <button id="btnStart" type="button" class="btn btn-primary btn-lg" disabled>
+            ⚡ Найти лучшие моменты и нарезать 9:16
+          </button>
+        </div>
       </div>
 
       <!-- Right: Live 9:16 Phone Preview -->
