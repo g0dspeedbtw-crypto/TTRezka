@@ -118,6 +118,37 @@
   const dashboardBackdrop = document.getElementById('dashboardBackdrop');
   const btnCloseDashboard = document.getElementById('btnCloseDashboard');
   const dashboardBody = document.getElementById('dashboardBody');
+  const dashTabs = document.getElementById('dashTabs');
+  const dashPlanBody = document.getElementById('dashPlanBody');
+  const dashDiskBody = document.getElementById('dashDiskBody');
+  const btnToggleSafeZone = document.getElementById('btnToggleSafeZone');
+  const safeZoneOverlay = document.getElementById('safeZoneOverlay');
+  const btnToggleBatch = document.getElementById('btnToggleBatch');
+  const batchQueueBox = document.getElementById('batchQueueBox');
+  const batchUrlsInput = document.getElementById('batchUrlsInput');
+  const btnStartBatch = document.getElementById('btnStartBatch');
+  const batchSummary = document.getElementById('batchSummary');
+  const batchStatusList = document.getElementById('batchStatusList');
+  const manualTimecodesInput = document.getElementById('manualTimecodesInput');
+  const outroToggle = document.getElementById('outroToggle');
+  const outroBox = document.getElementById('outroBox');
+  const outroSelect = document.getElementById('outroSelect');
+  const outroFileInput = document.getElementById('outroFileInput');
+  const btnUploadOutro = document.getElementById('btnUploadOutro');
+  const btnOpenWebcamCrop = document.getElementById('btnOpenWebcamCrop');
+  const webcamRectBadge = document.getElementById('webcamRectBadge');
+  const btnResetWebcamRect = document.getElementById('btnResetWebcamRect');
+  const webcamCropModal = document.getElementById('webcamCropModal');
+  const webcamCropBackdrop = document.getElementById('webcamCropBackdrop');
+  const btnCloseWebcamCrop = document.getElementById('btnCloseWebcamCrop');
+  const btnCancelWebcamCrop = document.getElementById('btnCancelWebcamCrop');
+  const btnSaveWebcamCrop = document.getElementById('btnSaveWebcamCrop');
+  const webcamCropCanvas = document.getElementById('webcamCropCanvas');
+  const webcamCropCoords = document.getElementById('webcamCropCoords');
+  const presetLibraryBar = document.getElementById('presetLibraryBar');
+  const btnExportPresetJson = document.getElementById('btnExportPresetJson');
+  const btnImportPresetJson = document.getElementById('btnImportPresetJson');
+  const importPresetJsonInput = document.getElementById('importPresetJsonInput');
   const ollamaRow = document.getElementById('ollamaRow');
   const ollamaSelect = document.getElementById('ollamaSelect');
   const geminiKeyInput = document.getElementById('geminiKeyInput');
@@ -553,6 +584,14 @@
     if (p.satisfying_video_id && satisfyingSelect) satisfyingSelect.value = p.satisfying_video_id;
     if (typeof p.auto_cover === 'boolean' && autoCoverToggle) autoCoverToggle.checked = p.auto_cover;
     if (typeof p.uniquify_video === 'boolean' && uniquifyToggle) uniquifyToggle.checked = p.uniquify_video;
+    if (typeof p.enable_outro === 'boolean' && outroToggle) {
+      outroToggle.checked = p.enable_outro;
+      if (outroBox) outroBox.classList.toggle('hidden', !p.enable_outro);
+    }
+    if (p.outro_id && outroSelect) outroSelect.value = p.outro_id;
+    state.webcamRect = p.webcam_rect && typeof p.webcam_rect === 'object' ? p.webcam_rect : null;
+    if (webcamRectBadge) webcamRectBadge.classList.toggle('hidden', !state.webcamRect);
+    if (btnResetWebcamRect) btnResetWebcamRect.classList.toggle('hidden', !state.webcamRect);
     updateLivePreview();
   }
 
@@ -1323,6 +1362,10 @@
       satisfying_video_id: satisfyingSelect ? satisfyingSelect.value || null : null,
       uniquify_video: !!(uniquifyToggle && uniquifyToggle.checked),
       auto_cover: !!(autoCoverToggle && autoCoverToggle.checked),
+      webcam_rect: state.webcamRect || null,
+      enable_outro: !!(outroToggle && outroToggle.checked),
+      outro_id: outroSelect ? outroSelect.value || null : null,
+      manual_timecodes: manualTimecodesInput ? (manualTimecodesInput.value || '').trim() || null : null,
       search_chat_activity: searchChatToggle ? searchChatToggle.checked : true,
       search_laughter: searchLaughterToggle ? searchLaughterToggle.checked : true,
       use_ai_director: useAiDirectorToggle ? useAiDirectorToggle.checked : true,
@@ -1679,9 +1722,38 @@
             <button type="button" class="btn btn-secondary btn-sm btn-edit">✏️ Редактор</button>
             <button type="button" class="btn btn-ghost btn-sm btn-rerender">🎨 Новый стиль</button>
             <button type="button" class="btn btn-ghost btn-sm btn-copy-cap">📋 Описание</button>
+            <button type="button" class="btn btn-ghost btn-sm btn-add-plan btn-full">📅 Добавить в контент-план</button>
           </div>
         </div>
       `;
+
+      const btnPlan = card.querySelector('.btn-add-plan');
+      if (btnPlan) {
+        btnPlan.addEventListener('click', async () => {
+          const acc = getActiveAccount();
+          const today = new Date().toISOString().slice(0, 10);
+          try {
+            const res = await fetch('/api/plan', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                title: clip.title || 'Клип',
+                account_id: acc ? acc.id : '',
+                account_name: acc ? acc.name : 'Основной',
+                platform: 'tiktok',
+                scheduled_date: today,
+                scheduled_time: '18:00',
+                job_id: job.job_id,
+                clip_id: clip.id,
+              }),
+            });
+            if (!res.ok) throw new Error('Ошибка');
+            showToast('📅 Клип добавлен в контент-план (Дашборд → Контент-план)');
+          } catch (_) {
+            showToast('Не удалось добавить в план');
+          }
+        });
+      }
 
       const compileCb = card.querySelector('.clip-compile-cb');
       if (compileCb) {
@@ -2023,5 +2095,454 @@
     });
   }
 
+  // =====================================================================
+  // v2.2.0 Features: Safe Zone (#7), Batch Queue (#11), Webcam Crop (#14),
+  // Style Presets + JSON (#15), Disk Manager (#18), Content Plan (#19), Outro (#20)
+  // =====================================================================
+
+  // #7 Safe Zone Overlay toggle
+  if (btnToggleSafeZone && safeZoneOverlay) {
+    btnToggleSafeZone.addEventListener('click', () => {
+      const hidden = safeZoneOverlay.classList.toggle('hidden');
+      btnToggleSafeZone.classList.toggle('active', !hidden);
+      btnToggleSafeZone.textContent = hidden ? '📱 Safe Zone' : '📱 Safe Zone: ВКЛ';
+    });
+  }
+
+  // #20 Outro CTA toggle & uploader
+  async function refreshOutrosList() {
+    if (!outroSelect) return;
+    try {
+      const res = await fetch('/api/outros');
+      const data = await res.json();
+      const cur = outroSelect.value;
+      outroSelect.innerHTML = '<option value="">Аутро не выбрано</option>';
+      (data.items || []).forEach((it) => {
+        const opt = document.createElement('option');
+        opt.value = it.id;
+        opt.textContent = `${it.name} (${it.ext.replace('.', '').toUpperCase()})`;
+        outroSelect.appendChild(opt);
+      });
+      if (cur) outroSelect.value = cur;
+    } catch (_) {}
+  }
+
+  if (outroToggle && outroBox) {
+    outroToggle.addEventListener('change', () => {
+      outroBox.classList.toggle('hidden', !outroToggle.checked);
+    });
+  }
+  if (btnUploadOutro && outroFileInput) {
+    btnUploadOutro.addEventListener('click', () => outroFileInput.click());
+    outroFileInput.addEventListener('change', async () => {
+      const f = outroFileInput.files && outroFileInput.files[0];
+      if (!f) return;
+      btnUploadOutro.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', f);
+        const res = await fetch('/api/outros', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки аутро');
+        await refreshOutrosList();
+        outroSelect.value = data.id;
+        showToast(`Аутро «${data.name}» добавлено!`);
+      } catch (err) {
+        showToast(err.message || 'Ошибка загрузки аутро');
+      } finally {
+        btnUploadOutro.disabled = false;
+        outroFileInput.value = '';
+      }
+    });
+  }
+
+  // #15 Built-in Style Presets Library + JSON Export/Import
+  const BUILTIN_PRESETS = {
+    streamer: {
+      subtitle_style: 'hormozi', font_id: 'montserrat', font_size: 'large', position: 'lower_third',
+      crop_mode: 'split_stream', enable_subtitles: true, uppercase: true, show_hook_banner: true,
+      hook_position: 'between', hook_text_color: '#0c0e18', hook_bg_color: '#ffffff', hook_border_color: '#ffe600',
+      jump_cuts: true, target_fps: 60, video_enhance: true, enable_satisfying_video: false, auto_cover: true,
+    },
+    hormozi: {
+      subtitle_style: 'hormozi', font_id: 'montserrat', font_size: 'large', position: 'center',
+      crop_mode: 'face_track', enable_subtitles: true, uppercase: true, show_hook_banner: true,
+      hook_position: 'top', hook_text_color: '#ffffff', hook_bg_color: '#11131d', hook_border_color: '#ffe600',
+      jump_cuts: true, target_fps: 30, video_enhance: true, enable_satisfying_video: false, auto_cover: true,
+    },
+    podcast: {
+      subtitle_style: 'classic', font_id: 'rubik', font_size: 'medium', position: 'lower_third',
+      crop_mode: 'face_track', enable_subtitles: true, uppercase: false, show_hook_banner: true,
+      hook_position: 'top', hook_text_color: '#ffffff', hook_bg_color: 'transparent', hook_border_color: '#000000',
+      jump_cuts: false, target_fps: 30, video_enhance: false, enable_satisfying_video: false, auto_cover: false,
+    },
+    minimal: {
+      subtitle_style: 'minimal', font_id: 'rubik', font_size: 'small', position: 'lower_third',
+      crop_mode: 'fill', enable_subtitles: true, uppercase: false, show_hook_banner: false,
+      jump_cuts: false, target_fps: 30, video_enhance: true, enable_satisfying_video: false, auto_cover: false,
+    },
+    brainrot: {
+      subtitle_style: 'neon', font_id: 'unbounded', font_size: 'large', position: 'center',
+      crop_mode: 'fill', enable_subtitles: true, uppercase: true, show_hook_banner: true,
+      hook_position: 'top', hook_text_color: '#0c0e18', hook_bg_color: '#ffe600', hook_border_color: '#ff2e93',
+      jump_cuts: true, target_fps: 60, video_enhance: true, enable_satisfying_video: true, auto_cover: true,
+    },
+  };
+
+  if (presetLibraryBar) {
+    presetLibraryBar.querySelectorAll('.preset-chip').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.preset;
+        const preset = BUILTIN_PRESETS[key];
+        if (!preset) return;
+        applyAccountPreset({ preset });
+        showToast(`Применён шаблон: ${btn.textContent.trim()}`);
+      });
+    });
+  }
+
+  if (btnExportPresetJson) {
+    btnExportPresetJson.addEventListener('click', () => {
+      const preset = getCurrentOptions(0);
+      delete preset.gemini_api_key;
+      const blob = new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `tikcut_preset_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Настройки экспортированы в JSON!');
+    });
+  }
+  if (btnImportPresetJson && importPresetJsonInput) {
+    btnImportPresetJson.addEventListener('click', () => importPresetJsonInput.click());
+    importPresetJsonInput.addEventListener('change', async () => {
+      const f = importPresetJsonInput.files && importPresetJsonInput.files[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        const parsed = JSON.parse(text);
+        applyAccountPreset({ preset: parsed });
+        showToast('Пресет из JSON успешно применён!');
+      } catch (_) {
+        showToast('Некорректный JSON-файл пресета');
+      } finally {
+        importPresetJsonInput.value = '';
+      }
+    });
+  }
+
+  // #11 Batch URL Queue
+  let batchPollTimer = null;
+  function renderBatchStatus(data) {
+    if (!batchStatusList || !batchSummary) return;
+    const items = data.items || [];
+    if (!items.length) return;
+    batchStatusList.classList.remove('hidden');
+    batchSummary.textContent = data.running
+      ? `⏳ В работе: ${data.completed + data.failed}/${data.total}`
+      : `✅ Завершено: ${data.completed}/${data.total}${data.failed ? ` (ошибок: ${data.failed})` : ''}`;
+    const icons = { queued: '⏳', probing: '🔍', processing: '⚙️', completed: '✅', failed: '❌' };
+    batchStatusList.innerHTML = items.map((it) => `
+      <div class="batch-item">
+        <span>${icons[it.status] || '⏳'}</span>
+        <span class="batch-item-url" title="${escapeHtml(it.url)}">${escapeHtml(it.title || it.url)}</span>
+        <span class="history-meta">${escapeHtml(it.error || it.status)}</span>
+      </div>
+    `).join('');
+  }
+
+  async function pollBatchStatus() {
+    try {
+      const res = await fetch('/api/batch-urls');
+      const data = await res.json();
+      renderBatchStatus(data);
+      if (data.running) {
+        batchPollTimer = setTimeout(pollBatchStatus, 2500);
+      } else {
+        refreshHistory();
+        if (btnStartBatch) btnStartBatch.disabled = false;
+      }
+    } catch (_) {}
+  }
+
+  if (btnToggleBatch && batchQueueBox) {
+    btnToggleBatch.addEventListener('click', () => batchQueueBox.classList.toggle('hidden'));
+  }
+  if (btnStartBatch && batchUrlsInput) {
+    btnStartBatch.addEventListener('click', async () => {
+      const urls = (batchUrlsInput.value || '').split('\n').map((s) => s.trim()).filter(Boolean);
+      if (!urls.length) {
+        showToast('Вставьте хотя бы одну ссылку в очередь');
+        return;
+      }
+      btnStartBatch.disabled = true;
+      try {
+        const res = await fetch('/api/batch-urls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls, options: getCurrentOptions(0) }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка запуска очереди');
+        renderBatchStatus(data);
+        showToast(`Очередь запущена (${urls.length} ссылок)!`);
+        clearTimeout(batchPollTimer);
+        pollBatchStatus();
+      } catch (err) {
+        showToast(err.message || 'Ошибка очереди');
+        btnStartBatch.disabled = false;
+      }
+    });
+  }
+
+  // #14 Interactive Webcam Crop Drawer Modal
+  let cropImg = null;
+  let draftRect = null;
+  let draggingCrop = false;
+  let dragStart = { x: 0, y: 0 };
+
+  function redrawWebcamCanvas() {
+    if (!webcamCropCanvas) return;
+    const ctx = webcamCropCanvas.getContext('2d');
+    const W = webcamCropCanvas.width;
+    const H = webcamCropCanvas.height;
+    ctx.clearRect(0, 0, W, H);
+    if (cropImg && cropImg.complete && cropImg.naturalWidth) {
+      ctx.drawImage(cropImg, 0, 0, W, H);
+    } else {
+      ctx.fillStyle = '#121628';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#8b95b3';
+      ctx.font = '16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Макет 16:9 (загрузите локальное видео для живого кадра)', W / 2, H / 2);
+    }
+    const r = draftRect || state.webcamRect;
+    if (r && r.w > 0.02 && r.h > 0.02) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+      ctx.fillRect(0, 0, W, H);
+      const rx = r.x * W, ry = r.y * H, rw = r.w * W, rh = r.h * H;
+      if (cropImg && cropImg.complete && cropImg.naturalWidth) {
+        ctx.drawImage(cropImg, r.x * cropImg.naturalWidth, r.y * cropImg.naturalHeight, r.w * cropImg.naturalWidth, r.h * cropImg.naturalHeight, rx, ry, rw, rh);
+      } else {
+        ctx.clearRect(rx, ry, rw, rh);
+      }
+      ctx.strokeStyle = '#ffe600';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(rx, ry, rw, rh);
+      if (webcamCropCoords) {
+        webcamCropCoords.textContent = `Вебка: X=${Math.round(r.x * 100)}%, Y=${Math.round(r.y * 100)}%, Ш=${Math.round(r.w * 100)}%, В=${Math.round(r.h * 100)}%`;
+      }
+    }
+  }
+
+  function closeWebcamCropModal() {
+    if (webcamCropModal) webcamCropModal.classList.add('hidden');
+  }
+
+  if (btnOpenWebcamCrop && webcamCropModal && webcamCropCanvas) {
+    btnOpenWebcamCrop.addEventListener('click', () => {
+      draftRect = state.webcamRect ? { ...state.webcamRect } : null;
+      cropImg = new Image();
+      cropImg.onload = redrawWebcamCanvas;
+      cropImg.onerror = redrawWebcamCanvas;
+      if (state.currentJobId) {
+        cropImg.src = `/api/jobs/${state.currentJobId}/preview-frame?t=${Date.now()}`;
+      } else {
+        redrawWebcamCanvas();
+      }
+      webcamCropModal.classList.remove('hidden');
+    });
+
+    const getCanvasPos = (ev) => {
+      const rect = webcamCropCanvas.getBoundingClientRect();
+      return {
+        x: Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width)),
+        y: Math.max(0, Math.min(1, (ev.clientY - rect.top) / rect.height)),
+      };
+    };
+    webcamCropCanvas.addEventListener('mousedown', (ev) => {
+      draggingCrop = true;
+      dragStart = getCanvasPos(ev);
+      draftRect = { x: dragStart.x, y: dragStart.y, w: 0.01, h: 0.01 };
+    });
+    window.addEventListener('mousemove', (ev) => {
+      if (!draggingCrop) return;
+      const cur = getCanvasPos(ev);
+      draftRect = {
+        x: Math.min(dragStart.x, cur.x),
+        y: Math.min(dragStart.y, cur.y),
+        w: Math.abs(cur.x - dragStart.x),
+        h: Math.abs(cur.y - dragStart.y),
+      };
+      redrawWebcamCanvas();
+    });
+    window.addEventListener('mouseup', () => { draggingCrop = false; });
+
+    if (btnCloseWebcamCrop) btnCloseWebcamCrop.addEventListener('click', closeWebcamCropModal);
+    if (btnCancelWebcamCrop) btnCancelWebcamCrop.addEventListener('click', closeWebcamCropModal);
+    if (webcamCropBackdrop) webcamCropBackdrop.addEventListener('click', closeWebcamCropModal);
+    if (btnSaveWebcamCrop) {
+      btnSaveWebcamCrop.addEventListener('click', () => {
+        if (!draftRect || draftRect.w < 0.05 || draftRect.h < 0.05) {
+          showToast('Обведите область вебки побольше');
+          return;
+        }
+        state.webcamRect = {
+          x: Number(draftRect.x.toFixed(4)),
+          y: Number(draftRect.y.toFixed(4)),
+          w: Number(draftRect.w.toFixed(4)),
+          h: Number(draftRect.h.toFixed(4)),
+        };
+        if (webcamRectBadge) webcamRectBadge.classList.remove('hidden');
+        if (btnResetWebcamRect) btnResetWebcamRect.classList.remove('hidden');
+        closeWebcamCropModal();
+        showToast('Область веб-камеры сохранена!');
+      });
+    }
+  }
+  if (btnResetWebcamRect) {
+    btnResetWebcamRect.addEventListener('click', () => {
+      state.webcamRect = null;
+      if (webcamRectBadge) webcamRectBadge.classList.add('hidden');
+      btnResetWebcamRect.classList.add('hidden');
+      showToast('Возвращён стандартный кроп по углу');
+    });
+  }
+
+  // #18 Disk Manager + #19 Content Plan Tabs inside Dashboard Modal
+  async function loadPlanTab() {
+    if (!dashPlanBody) return;
+    dashPlanBody.innerHTML = '<div class="history-meta">Загрузка контент-плана...</div>';
+    try {
+      const res = await fetch('/api/plan');
+      const data = await res.json();
+      const items = data.items || [];
+      const today = new Date().toISOString().slice(0, 10);
+      const accOpts = (state.accounts || []).map((a) => `<option value="${escapeHtml(a.name)}">${escapeHtml(a.name)}</option>`).join('') || '<option value="Основной">Основной</option>';
+      dashPlanBody.innerHTML = `
+        <div class="plan-add-row">
+          <input id="planNewTitle" type="text" placeholder="Название клипа / идеи..." />
+          <select id="planNewAcc">${accOpts}</select>
+          <input id="planNewDate" type="date" value="${today}" />
+          <input id="planNewTime" type="time" value="18:00" />
+          <button id="btnPlanAdd" type="button" class="btn btn-primary btn-sm">+ Добавить</button>
+        </div>
+        <div class="plan-list">
+          ${items.length ? items.map((it) => `
+            <div class="plan-card ${it.status === 'published' ? 'done' : ''}">
+              <div>
+                <div style="font-weight:700;font-size:13px;">${escapeHtml(it.title)}</div>
+                <div class="history-meta">${escapeHtml(it.scheduled_date)} ${escapeHtml(it.scheduled_time)} • ${escapeHtml(it.account_name)} • ${escapeHtml(it.platform.toUpperCase())}</div>
+              </div>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="btn btn-secondary btn-sm btn-plan-toggle" data-id="${it.id}" data-status="${it.status}">
+                  ${it.status === 'published' ? '✅ Выложено' : '⏳ В плане'}
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm btn-plan-del" data-id="${it.id}">🗑</button>
+              </div>
+            </div>
+          `).join('') : '<div class="history-meta">Пока нет запланированных публикаций. Нажмите «📅 Добавить в контент-план» на любом клипе или добавьте выше.</div>'}
+        </div>
+      `;
+      const btnAdd = document.getElementById('btnPlanAdd');
+      if (btnAdd) {
+        btnAdd.addEventListener('click', async () => {
+          const title = (document.getElementById('planNewTitle')?.value || '').trim();
+          if (!title) return showToast('Введите название');
+          await fetch('/api/plan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title,
+              account_name: document.getElementById('planNewAcc')?.value || 'Основной',
+              scheduled_date: document.getElementById('planNewDate')?.value || today,
+              scheduled_time: document.getElementById('planNewTime')?.value || '18:00',
+              platform: 'tiktok',
+            }),
+          });
+          loadPlanTab();
+        });
+      }
+      dashPlanBody.querySelectorAll('.btn-plan-toggle').forEach((b) => {
+        b.addEventListener('click', async () => {
+          const nextSt = b.dataset.status === 'published' ? 'planned' : 'published';
+          await fetch(`/api/plan/${b.dataset.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: nextSt }),
+          });
+          loadPlanTab();
+        });
+      });
+      dashPlanBody.querySelectorAll('.btn-plan-del').forEach((b) => {
+        b.addEventListener('click', async () => {
+          await fetch(`/api/plan/${b.dataset.id}`, { method: 'DELETE' });
+          loadPlanTab();
+        });
+      });
+    } catch (_) {
+      dashPlanBody.innerHTML = '<div class="history-meta">Ошибка загрузки контент-плана</div>';
+    }
+  }
+
+  async function loadDiskTab() {
+    if (!dashDiskBody) return;
+    dashDiskBody.innerHTML = '<div class="history-meta">Подсчёт занятого места...</div>';
+    try {
+      const res = await fetch('/api/disk');
+      const d = await res.json();
+      dashDiskBody.innerHTML = `
+        <div class="dash-kpi-grid">
+          <div class="dash-kpi"><div class="dash-kpi-val">${d.total_mb} МБ</div><div class="dash-kpi-lbl">Всего занято</div></div>
+          <div class="dash-kpi"><div class="dash-kpi-val">${d.sources_mb} МБ</div><div class="dash-kpi-lbl">Исходники и аудио</div></div>
+          <div class="dash-kpi"><div class="dash-kpi-val">${d.clips_mb} МБ</div><div class="dash-kpi-lbl">Готовые клипы</div></div>
+          <div class="dash-kpi"><div class="dash-kpi-val">${d.assets_mb} МБ</div><div class="dash-kpi-lbl">Ассеты (музыка/баннеры)</div></div>
+          <div class="dash-kpi"><div class="dash-kpi-val">${d.exports_mb} МБ</div><div class="dash-kpi-lbl">Папка экспортов</div></div>
+        </div>
+        <div class="history-meta" style="margin-top:8px;">Очистка исходников удаляет только тяжёлые исходные видео и WAV — все ваши готовые клипы 9:16 и обложки остаются нетронутыми!</div>
+        <div class="disk-actions-row">
+          <button id="btnCleanOld7" type="button" class="btn btn-secondary btn-sm">🧹 Очистить исходники старше 7 дней</button>
+          <button id="btnCleanAllSrc" type="button" class="btn btn-secondary btn-sm">🧹 Очистить все исходники</button>
+          <button id="btnCleanCache" type="button" class="btn btn-ghost btn-sm">🗑 Очистить временный кэш</button>
+        </div>
+      `;
+      document.getElementById('btnCleanOld7')?.addEventListener('click', async () => {
+        const r = await (await fetch('/api/disk/cleanup-sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ older_than_days: 7 }) })).json();
+        showToast(`Освобождено ${r.freed_mb} МБ (${r.removed_files} файлов)`);
+        loadDiskTab();
+      });
+      document.getElementById('btnCleanAllSrc')?.addEventListener('click', async () => {
+        const r = await (await fetch('/api/disk/cleanup-sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ older_than_days: 0 }) })).json();
+        showToast(`Освобождено ${r.freed_mb} МБ (${r.removed_files} файлов)`);
+        loadDiskTab();
+      });
+      document.getElementById('btnCleanCache')?.addEventListener('click', async () => {
+        const r = await (await fetch('/api/disk/cleanup-cache', { method: 'POST' })).json();
+        showToast(`Кэш очищен: освобождено ${r.freed_mb} МБ`);
+        loadDiskTab();
+      });
+    } catch (_) {
+      dashDiskBody.innerHTML = '<div class="history-meta">Не удалось получить статистику диска</div>';
+    }
+  }
+
+  if (dashTabs) {
+    dashTabs.querySelectorAll('.dash-tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const key = tab.dataset.dtab;
+        dashTabs.querySelectorAll('.dash-tab').forEach((t) => t.classList.toggle('active', t === tab));
+        if (dashboardBody) dashboardBody.classList.toggle('hidden', key !== 'stats');
+        if (dashPlanBody) dashPlanBody.classList.toggle('hidden', key !== 'plan');
+        if (dashDiskBody) dashDiskBody.classList.toggle('hidden', key !== 'disk');
+        if (key === 'plan') loadPlanTab();
+        if (key === 'disk') loadDiskTab();
+      });
+    });
+  }
+
+  refreshOutrosList();
   init();
 })();

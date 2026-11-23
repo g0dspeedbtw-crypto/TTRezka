@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from backend.accounts import list_accounts
 from backend.ai_director import find_funny_moments_gemini, find_funny_moments_ollama
-from backend.config import ADS_DIR, AVATARS_DIR, EXPORTS_DIR, JOBS_DIR, MUSIC_DIR, SATISFYING_DIR, load_settings
+from backend.config import ADS_DIR, AVATARS_DIR, EXPORTS_DIR, JOBS_DIR, MUSIC_DIR, OUTROS_DIR, SATISFYING_DIR, load_settings
 from backend.hardware import get_hardware_info
 from backend.highlights import (
     _find_audio_peak_times,
@@ -26,8 +26,10 @@ from backend.remote import (
     download_lightweight_audio,
     fetch_remote_transcript,
     find_remote_highlights,
+    probe_remote_url,
 )
 from backend.renderer import merge_clips_compilation, probe_video, render_clip
+from backend.studio_extras import parse_manual_timecodes
 from backend.transcriber import extract_audio_wav, transcribe_russian
 from backend.twitch_chat import generate_tiktok_caption
 
@@ -56,6 +58,13 @@ def _resolve_music_path(bg_music_id: Optional[str]) -> Optional[Path]:
     if not bg_music_id:
         return None
     p = MUSIC_DIR / Path(bg_music_id).name
+    return p if p.exists() else None
+
+
+def _resolve_outro_path(outro_id: Optional[str]) -> Optional[Path]:
+    if not outro_id:
+        return None
+    p = OUTROS_DIR / Path(outro_id).name
     return p if p.exists() else None
 
 
@@ -235,6 +244,8 @@ def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str
         "uniquify_video": bool(options.get("uniquify_video", False)),
         "auto_cover": bool(options.get("auto_cover", False)),
         "cover_title": hook_title,
+        "webcam_rect": options.get("webcam_rect") if isinstance(options.get("webcam_rect"), dict) else None,
+        "outro_path": _resolve_outro_path(options.get("outro_id")) if options.get("enable_outro") else None,
     }
 
 
@@ -289,6 +300,13 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         ollama_model = (options.get("ollama_model") or "").strip() if use_ai else ""
         highlights: List[Dict[str, Any]] = []
 
+        # Feature #12: Manual Timecodes override (skip AI/heuristic search and cut exact ranges!)
+        manual_tc_raw = (options.get("manual_timecodes") or "").strip()
+        if manual_tc_raw:
+            highlights = parse_manual_timecodes(manual_tc_raw, float(remote_meta.get("duration") or 0))
+            if highlights:
+                _update_job(job_id, stage="analyzing", progress=38, message=f"Вырезка по {len(highlights)} заданным таймкодам...")
+
         # Extract top YouTube Heatmap / Twitch Chat peak centers to guide the AI Comedy Director!
         remote_heatmap = (remote_meta.get("heatmap") or []) if search_chat else []
         remote_peak_times: List[float] = []
@@ -296,8 +314,8 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             for h in sorted(remote_heatmap, key=lambda x: float(x.get("value", 0.0)), reverse=True)[:18]:
                 remote_peak_times.append((float(h["start_time"]) + float(h["end_time"])) * 0.5)
 
-        # Priority 1: Full-transcript AI Comedy Director (unless shuffling to force fresh local picks)
-        if segments and gemini_key and shuffle_seed == 0:
+        # Priority 1: Full-transcript AI Comedy Director (unless shuffling or manual timecodes)
+        if not highlights and segments and gemini_key and shuffle_seed == 0:
             try:
                 highlights = find_funny_moments_gemini(
                     segments=segments,
@@ -536,16 +554,26 @@ def _run_local_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         ollama_model = (options.get("ollama_model") or "").strip() if use_ai else ""
         highlights: List[Dict[str, Any]] = []
 
+        # Feature #12: Manual Timecodes override
+        manual_tc_raw = (options.get("manual_timecodes") or "").strip()
+        if manual_tc_raw:
+            highlights = parse_manual_timecodes(manual_tc_raw, total_duration)
+            if highlights:
+                for hl in highlights:
+                    seg_words = [w["word"] for w in words if w["end"] >= hl["start"] and w["start"] <= hl["end"]]
+                    hl["transcript"] = " ".join(seg_words).strip()
+                _update_job(job_id, stage="analyzing", progress=66, message=f"Вырезка по {len(highlights)} заданным таймкодам...")
+
         # Compute audio laughter/excitement peaks to annotate transcript for the AI Comedy Director!
         local_peak_times: List[float] = []
-        if search_laugh:
+        if not highlights and search_laugh:
             try:
                 _rms, _burst, _bsec = compute_audio_features(wav_path, bin_sec=0.25)
                 local_peak_times = _find_audio_peak_times(_rms, _burst, _bsec, top_k=24)
             except Exception:
                 pass
 
-        if segments and gemini_key and shuffle_seed == 0:
+        if not highlights and segments and gemini_key and shuffle_seed == 0:
             try:
                 highlights = find_funny_moments_gemini(
                     segments=segments,
@@ -1144,3 +1172,93 @@ def get_studio_dashboard_stats() -> Dict[str, Any]:
         "accounts": accounts,
         "exports_dir": str(EXPORTS_DIR.resolve()),
     }
+
+
+# =====================================================================
+# Feature #11: Batch URL Queue (sequential unattended processing)
+# =====================================================================
+
+_BATCH_LOCK = threading.Lock()
+_BATCH_STATE: Dict[str, Any] = {
+    "running": False,
+    "total": 0,
+    "completed": 0,
+    "failed": 0,
+    "current_index": -1,
+    "items": [],
+}
+
+
+def get_batch_status() -> Dict[str, Any]:
+    with _BATCH_LOCK:
+        return json.loads(json.dumps(_BATCH_STATE))
+
+
+def start_batch_urls(urls: List[str], options: Dict[str, Any]) -> Dict[str, Any]:
+    clean_urls = [u.strip() for u in urls if u and u.strip().startswith(("http://", "https://"))][:15]
+    if not clean_urls:
+        raise ValueError("Укажите хотя бы одну корректную ссылку (http/https)")
+
+    with _BATCH_LOCK:
+        if _BATCH_STATE["running"]:
+            raise RuntimeError("Пакетная очередь уже выполняется — дождитесь завершения")
+        _BATCH_STATE.update(
+            {
+                "running": True,
+                "total": len(clean_urls),
+                "completed": 0,
+                "failed": 0,
+                "current_index": 0,
+                "items": [
+                    {"url": u, "status": "queued", "job_id": None, "title": "", "error": None}
+                    for u in clean_urls
+                ],
+            }
+        )
+
+    def _worker() -> None:
+        for idx, url in enumerate(clean_urls):
+            with _BATCH_LOCK:
+                _BATCH_STATE["current_index"] = idx
+                _BATCH_STATE["items"][idx]["status"] = "probing"
+            try:
+                remote_meta = probe_remote_url(url)
+                job_id = f"batch_{int(time.time())}_{idx + 1}"
+                job = create_remote_job(job_id, url, remote_meta)
+                with _BATCH_LOCK:
+                    _BATCH_STATE["items"][idx]["job_id"] = job_id
+                    _BATCH_STATE["items"][idx]["title"] = job.get("original_filename", url)
+                    _BATCH_STATE["items"][idx]["status"] = "processing"
+
+                opts = dict(options)
+                _update_job(
+                    job_id,
+                    status="processing",
+                    stage="starting",
+                    progress=2,
+                    message="Пакетная обработка: запуск...",
+                    options=opts,
+                    error=None,
+                )
+                _run_remote_pipeline(job_id, opts)
+                fin = get_job(job_id) or {}
+                if fin.get("status") == "completed":
+                    with _BATCH_LOCK:
+                        _BATCH_STATE["items"][idx]["status"] = "completed"
+                        _BATCH_STATE["completed"] += 1
+                else:
+                    with _BATCH_LOCK:
+                        _BATCH_STATE["items"][idx]["status"] = "failed"
+                        _BATCH_STATE["items"][idx]["error"] = fin.get("error") or "Ошибка обработки"
+                        _BATCH_STATE["failed"] += 1
+            except Exception as exc:
+                with _BATCH_LOCK:
+                    _BATCH_STATE["items"][idx]["status"] = "failed"
+                    _BATCH_STATE["items"][idx]["error"] = str(exc)[:200]
+                    _BATCH_STATE["failed"] += 1
+        with _BATCH_LOCK:
+            _BATCH_STATE["running"] = False
+            _BATCH_STATE["current_index"] = -1
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return get_batch_status()

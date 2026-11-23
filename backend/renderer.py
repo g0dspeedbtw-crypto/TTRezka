@@ -522,6 +522,7 @@ def _build_video_framing_chain(
     webcam_size: float = 0.28,
     webcam_img_idx: Optional[int] = None,
     satisfying_idx: Optional[int] = None,
+    webcam_rect: Optional[Dict[str, float]] = None,
 ) -> str:
     """Build FFmpeg filter chain producing [base] at 1080x1920."""
     # Feature #1: Bottom Satisfying / Brainrot Split-Screen (Top 1080x960 main + Bottom 1080x960 satisfying loop)
@@ -544,13 +545,31 @@ def _build_video_framing_chain(
         )
 
     if crop_mode == "split_stream":
-        # Top 37.5% (1080x720) = custom streamer photo OR cropped streamer webcam
+        # Top 37.5% (1080x720) = custom streamer photo OR custom drag-selected webcam rect OR corner crop
         # Bottom 62.5% (1080x1200) = gameplay
         if webcam_img_idx is not None:
             return (
                 f"[{webcam_img_idx}:v]scale={VIDEO_W}:720:force_original_aspect_ratio=increase,"
                 f"crop={VIDEO_W}:720,setsar=1[cam];"
                 f"[0:v]scale={VIDEO_W}:1200:force_original_aspect_ratio=increase,"
+                f"crop={VIDEO_W}:1200,setsar=1[game];"
+                f"[cam][game]vstack=inputs=2,setsar=1[base];"
+            )
+        if (
+            isinstance(webcam_rect, dict)
+            and float(webcam_rect.get("w") or 0) >= 0.05
+            and float(webcam_rect.get("h") or 0) >= 0.05
+        ):
+            rx = max(0.0, min(0.95, float(webcam_rect.get("x", 0.0))))
+            ry = max(0.0, min(0.95, float(webcam_rect.get("y", 0.0))))
+            rw = max(0.05, min(1.0 - rx, float(webcam_rect.get("w", 0.25))))
+            rh = max(0.05, min(1.0 - ry, float(webcam_rect.get("h", 0.25))))
+            return (
+                f"[0:v]split=2[vcam][vgame];"
+                f"[vcam]crop=iw*{rw:.4f}:ih*{rh:.4f}:iw*{rx:.4f}:ih*{ry:.4f},"
+                f"scale={VIDEO_W}:720:force_original_aspect_ratio=increase,"
+                f"crop={VIDEO_W}:720,setsar=1[cam];"
+                f"[vgame]scale={VIDEO_W}:1200:force_original_aspect_ratio=increase,"
                 f"crop={VIDEO_W}:1200,setsar=1[game];"
                 f"[cam][game]vstack=inputs=2,setsar=1[base];"
             )
@@ -885,6 +904,8 @@ def render_clip(
     uniquify_video: bool = False,
     auto_cover: bool = False,
     cover_title: Optional[str] = None,
+    webcam_rect: Optional[Dict[str, float]] = None,
+    outro_path: Optional[Path] = None,
 ) -> Path:
     """
     Render a 1080x1920 9:16 TikTok MP4 clip with optional subtitles,
@@ -1029,6 +1050,7 @@ def render_clip(
             webcam_size=webcam_size,
             webcam_img_idx=webcam_img_idx,
             satisfying_idx=satisfying_idx,
+            webcam_rect=webcam_rect,
         )
         enhance_filters: List[str] = []
         if video_enhance:
@@ -1114,7 +1136,8 @@ def render_clip(
             encoders.append(["-c:v", "h264_videotoolbox", "-b:v", bitrate, "-pix_fmt", "yuv420p"])
         encoders.append(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
 
-        need_post = has_midroll_ad or auto_cover
+        has_outro = bool(outro_path and Path(outro_path).exists())
+        need_post = has_midroll_ad or auto_cover or has_outro
         render_target = (tmp_dir / "pre_post.mp4") if need_post else output_mp4
         meta_tag = f"tikcut_{uuid.uuid4().hex[:12]}" if uniquify_video else "tikcut_studio"
         used_enc_args = encoders[-1]
@@ -1151,7 +1174,7 @@ def render_clip(
 
         cur_mp4 = render_target
         if has_midroll_ad:
-            mid_out = (tmp_dir / "post_midroll.mp4") if auto_cover else output_mp4
+            mid_out = (tmp_dir / "post_midroll.mp4") if (auto_cover or has_outro) else output_mp4
             _insert_midroll_ad(
                 base_mp4=cur_mp4,
                 final_mp4=mid_out,
@@ -1164,9 +1187,10 @@ def render_clip(
             cur_mp4 = mid_out
 
         if auto_cover:
+            cov_out = (tmp_dir / "post_cover.mp4") if has_outro else output_mp4
             _prepend_auto_cover(
                 base_mp4=cur_mp4,
-                final_mp4=output_mp4,
+                final_mp4=cov_out,
                 thumb_jpg=thumb_jpg,
                 cover_title=cover_title or hook_text or "ТОП МОМЕНТ!",
                 font_path=font_path,
@@ -1174,7 +1198,19 @@ def render_clip(
                 tmp_dir=tmp_dir,
                 enc_args=used_enc_args,
             )
-        else:
+            cur_mp4 = cov_out
+
+        if has_outro:
+            _append_outro_cta(
+                base_mp4=cur_mp4,
+                final_mp4=output_mp4,
+                outro_path=Path(outro_path),
+                out_fps=out_fps,
+                tmp_dir=tmp_dir,
+                enc_args=used_enc_args,
+            )
+
+        if not auto_cover:
             # Generate crisp preview thumbnail at ~25% into the clip
             thumb_t = min(max(0.5, clip_duration * 0.25), max(0.1, clip_duration - 0.2))
             thumb_cmd = [
@@ -1195,3 +1231,93 @@ def render_clip(
         return output_mp4
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _append_outro_cta(
+    base_mp4: Path,
+    final_mp4: Path,
+    outro_path: Path,
+    out_fps: int,
+    tmp_dir: Path,
+    enc_args: List[str],
+) -> None:
+    """Feature #20: Append a 1-3s CTA outro video or image (scaled to 1080x1920) to the end of a clip."""
+    ext = outro_path.suffix.lower()
+    norm_outro = tmp_dir / "outro_norm.mp4"
+    if ext in (".png", ".jpg", ".jpeg", ".webp"):
+        cmd_norm = [
+            "ffmpeg", "-y",
+            "-loop", "1", "-t", "2.0", "-i", str(outro_path),
+            "-f", "lavfi", "-t", "2.0", "-i", "anullsrc=r=48000:cl=stereo",
+            "-vf", f"scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,crop={VIDEO_W}:{VIDEO_H},fps={out_fps},setsar=1,format=yuv420p",
+            *enc_args, "-c:a", "aac", "-b:a", "192k", "-shortest", str(norm_outro),
+        ]
+        subprocess.run(cmd_norm, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    else:
+        has_audio = False
+        probe_a = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(outro_path)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        if probe_a.stdout.strip():
+            has_audio = True
+        if has_audio:
+            cmd_norm = [
+                "ffmpeg", "-y", "-i", str(outro_path),
+                "-vf", f"scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,crop={VIDEO_W}:{VIDEO_H},fps={out_fps},setsar=1,format=yuv420p",
+                "-af", "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo",
+                *enc_args, "-c:a", "aac", "-b:a", "192k", str(norm_outro),
+            ]
+        else:
+            o_meta = probe_video(outro_path)
+            o_dur = max(0.5, float(o_meta.get("duration") or 2.0))
+            cmd_norm = [
+                "ffmpeg", "-y", "-i", str(outro_path),
+                "-f", "lavfi", "-t", f"{o_dur:.2f}", "-i", "anullsrc=r=48000:cl=stereo",
+                "-vf", f"scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,crop={VIDEO_W}:{VIDEO_H},fps={out_fps},setsar=1,format=yuv420p",
+                "-map", "0:v:0", "-map", "1:a:0",
+                *enc_args, "-c:a", "aac", "-b:a", "192k", "-shortest", str(norm_outro),
+            ]
+        subprocess.run(cmd_norm, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    fc = (
+        f"[0:v]fps={out_fps},setsar=1,format=yuv420p[v0];"
+        f"[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a0];"
+        f"[1:v]fps={out_fps},setsar=1,format=yuv420p[v1];"
+        f"[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[a1];"
+        f"[v0][a0][v1][a1]concat=n=2:v=1:a=1[vout][aout]"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(base_mp4),
+        "-i", str(norm_outro),
+        "-filter_complex", fc,
+        "-map", "[vout]", "-map", "[aout]",
+        *enc_args, "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart", str(final_mp4),
+    ]
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"Outro concat failed: {res.stderr[-400:]}")
+
+
+def extract_preview_frame(video_path: Path, out_jpg: Path, at_sec: Optional[float] = None) -> Path:
+    """Feature #14: Extract a single frame from source video for interactive webcam crop selection."""
+    if at_sec is None:
+        try:
+            meta = probe_video(video_path)
+            dur = float(meta.get("duration") or 10.0)
+            at_sec = min(max(1.0, dur * 0.15), max(0.0, dur - 0.5))
+        except Exception:
+            at_sec = 1.0
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", f"{max(0.0, at_sec):.2f}",
+        "-i", str(video_path),
+        "-vframes", "1",
+        "-vf", "scale=960:-2",
+        "-q:v", "3",
+        str(out_jpg),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return out_jpg

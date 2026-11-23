@@ -111,6 +111,23 @@
           <div class="url-hint">
             ИИ проанализирует транскрипт и карту пересмотров YouTube <strong>без скачивания всего стрима</strong>, а затем вырежет только лучшие моменты 9:16.
           </div>
+
+          <div class="batch-queue-wrap">
+            <button id="btnToggleBatch" type="button" class="btn btn-ghost btn-sm">
+              📥 Пакетная очередь ссылок (на ночь)
+            </button>
+            <div id="batchQueueBox" class="sub-box hidden" style="margin-top: 8px;">
+              <div class="field">
+                <label for="batchUrlsInput">Вставьте до 15 ссылок (по одной на строку) — обработаются подряд с текущими настройками</label>
+                <textarea id="batchUrlsInput" rows="3" placeholder="https://www.youtube.com/watch?v=...&#10;https://www.twitch.tv/videos/..."></textarea>
+              </div>
+              <div class="music-row" style="margin-top: 8px; justify-content: space-between;">
+                <button id="btnStartBatch" type="button" class="btn btn-primary btn-sm">🚀 Запустить очередь</button>
+                <span id="batchSummary" class="history-meta"></span>
+              </div>
+              <div id="batchStatusList" class="batch-status-list hidden"></div>
+            </div>
+          </div>
         </div>
 
         <!-- Tab 2: Local file upload -->
@@ -148,6 +165,20 @@
 
         <div class="card-header">
           <h2>2. Настройки нарезки и субтитров</h2>
+          <div class="preset-io-actions">
+            <button id="btnExportPresetJson" type="button" class="btn btn-ghost btn-sm" title="Скачать текущие настройки в JSON">⬇ JSON</button>
+            <input id="importPresetJsonInput" type="file" accept=".json,application/json" hidden />
+            <button id="btnImportPresetJson" type="button" class="btn btn-ghost btn-sm" title="Загрузить настройки из JSON">⬆ JSON</button>
+          </div>
+        </div>
+
+        <div class="preset-library-bar" id="presetLibraryBar">
+          <span class="preset-lib-label">🎨 Шаблоны:</span>
+          <button type="button" class="preset-chip" data-preset="streamer">🎮 Стример Twitch</button>
+          <button type="button" class="preset-chip" data-preset="hormozi">💼 Хормози</button>
+          <button type="button" class="preset-chip" data-preset="podcast">🎙 Подкаст</button>
+          <button type="button" class="preset-chip" data-preset="minimal">✨ Минимал Reels</button>
+          <button type="button" class="preset-chip" data-preset="brainrot">🧠 Brainrot</button>
         </div>
 
         <div class="form-grid">
@@ -226,6 +257,15 @@
             <div class="field">
               <label for="webcamSize">Размер области вебки: <strong id="webcamSizeVal">28%</strong></label>
               <input id="webcamSize" type="range" min="18" max="42" value="28" />
+            </div>
+            <div class="field" style="grid-column: 1 / -1;">
+              <div class="music-row" style="flex-wrap: wrap;">
+                <button id="btnOpenWebcamCrop" type="button" class="btn btn-secondary btn-sm">
+                  📐 Выделить вебку мышкой на кадре
+                </button>
+                <span id="webcamRectBadge" class="badge hidden">✅ Своя область задана</span>
+                <button id="btnResetWebcamRect" type="button" class="btn btn-ghost btn-sm hidden">Сбросить</button>
+              </div>
             </div>
           </div>
         </div>
@@ -315,6 +355,23 @@
               <span class="switch-label">🔄 Уникализатор (Anti-Duplicate)</span>
               <span class="switch"><input id="uniquifyToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
+            <label class="switch-item">
+              <span class="switch-label">🎬 Аутро (CTA в конце клипа)</span>
+              <span class="switch"><input id="outroToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+          </div>
+
+          <div id="outroBox" class="sub-box hidden" style="margin-bottom: 12px;">
+            <div class="field">
+              <label for="outroSelect">🎬 Файл аутро-хвоста (MP4 / MOV 1–3 сек или картинка PNG/JPG «Подпишись 👇»)</label>
+              <div class="music-row">
+                <select id="outroSelect">
+                  <option value="">Аутро не выбрано</option>
+                </select>
+                <input id="outroFileInput" type="file" accept="video/*,image/png,image/jpeg,image/webp,.mp4,.mov,.webm,.png,.jpg,.jpeg,.webp" hidden />
+                <button id="btnUploadOutro" type="button" class="btn btn-secondary btn-sm">+ Аутро</button>
+              </div>
+            </div>
           </div>
 
           <div id="satisfyingBox" class="sub-box hidden" style="margin-bottom: 12px;">
@@ -441,6 +498,13 @@
           </div>
         </div>
 
+        <div class="sub-box" style="margin: 12px 0;">
+          <div class="field">
+            <label for="manualTimecodesInput">✂️ Ручные таймкоды (необязательно — если заполнить, вырежет ровно их вместо автопоиска)</label>
+            <textarea id="manualTimecodesInput" rows="2" placeholder="Например:&#10;12:40-13:25 Смешной момент&#10;45:10-46:00 Жесткий клатч"></textarea>
+          </div>
+        </div>
+
         <button id="btnStart" type="button" class="btn btn-primary btn-lg" disabled>
           ⚡ Найти лучшие моменты и нарезать 9:16
         </button>
@@ -450,12 +514,23 @@
       <div class="card panel-preview">
         <div class="card-header">
           <h2>Живой предпросмотр 9:16</h2>
-          <span class="badge">Караоке-подсветка</span>
+          <button id="btnToggleSafeZone" type="button" class="btn btn-ghost btn-sm" title="Показать безопасную зону интерфейса TikTok / Shorts / Reels">
+            📱 Safe Zone
+          </button>
         </div>
 
         <div class="phone-mockup">
           <div class="phone-notch"></div>
           <div id="previewScreen" class="phone-screen mode-fill">
+            <div id="safeZoneOverlay" class="safe-zone-overlay hidden">
+              <div class="sz-top">Подписки &nbsp;|&nbsp; <strong>Рекомендации</strong></div>
+              <div class="sz-right-zone"><span>Кнопки UI</span></div>
+              <div class="sz-bottom-zone">
+                <div class="sz-handle">@channel_name</div>
+                <div class="sz-desc">Описание клипа и #хэштеги #рекомендации...</div>
+                <div class="sz-music">🎵 Оригинальный звук — TikCut</div>
+              </div>
+            </div>
             <div class="preview-bg-blur"></div>
             <div class="preview-video-frame">
               <div class="preview-split-cam hidden" id="previewSplitCam">
@@ -565,19 +640,50 @@
     </div>
   </div>
 
-  <!-- Studio Dashboard Modal -->
+  <!-- Studio Dashboard Modal (Stats + Content Plan #19 + Disk Manager #18) -->
   <div id="dashboardModal" class="modal hidden">
     <div class="modal-backdrop" id="dashboardBackdrop"></div>
-    <div class="modal-panel" style="width: min(680px, 94vw);">
+    <div class="modal-panel" style="width: min(740px, 95vw);">
       <div class="modal-header">
         <div>
           <h3>📊 Дашборд TikCut Studio</h3>
-          <div class="modal-sub">Статистика по проектам, аккаунтам и публикациям в TikTok / Shorts / Reels</div>
+          <div class="modal-sub">Статистика, календарь контент-плана и управление диском</div>
         </div>
         <button id="btnCloseDashboard" class="btn btn-ghost btn-sm">✕</button>
       </div>
+      <div class="dash-tabs" id="dashTabs">
+        <button type="button" class="dash-tab active" data-dtab="stats">📊 Статистика</button>
+        <button type="button" class="dash-tab" data-dtab="plan">📅 Контент-план</button>
+        <button type="button" class="dash-tab" data-dtab="disk">🧹 Диск и кэш</button>
+      </div>
       <div id="dashboardBody" class="dashboard-body">
         <div class="history-meta">Загрузка статистики...</div>
+      </div>
+      <div id="dashPlanBody" class="dashboard-body hidden"></div>
+      <div id="dashDiskBody" class="dashboard-body hidden"></div>
+    </div>
+  </div>
+
+  <!-- Interactive Webcam Crop Drawer Modal (#14) -->
+  <div id="webcamCropModal" class="modal hidden">
+    <div class="modal-backdrop" id="webcamCropBackdrop"></div>
+    <div class="modal-panel" style="width: min(820px, 95vw);">
+      <div class="modal-header">
+        <div>
+          <h3>📐 Выделение веб-камеры стримера</h3>
+          <div class="modal-sub">Зажмите левую кнопку мыши и обведите прямоугольником вебку стримера на кадре</div>
+        </div>
+        <button id="btnCloseWebcamCrop" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div class="webcam-canvas-wrap">
+        <canvas id="webcamCropCanvas" width="760" height="428"></canvas>
+      </div>
+      <div class="modal-footer" style="margin-top: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <span id="webcamCropCoords" class="history-meta">Выделите область на изображении</span>
+        <div style="display: flex; gap: 8px;">
+          <button id="btnCancelWebcamCrop" type="button" class="btn btn-ghost btn-sm">Отмена</button>
+          <button id="btnSaveWebcamCrop" type="button" class="btn btn-primary btn-sm">✅ Применить область</button>
+        </div>
       </div>
     </div>
   </div>

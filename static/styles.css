@@ -1744,3 +1744,200 @@ input[type="range"] {
 .hidden {
   display: none !important;
 }
+
+/* === v2.2.0: Safe Zone, Style Presets, Batch Queue, Webcam Drawer, Calendar & Disk === */
+.preset-io-actions {
+  display: flex;
+  gap: 6px;
+}
+.preset-library-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+}
+.preset-lib-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-right: 4px;
+}
+.preset-chip {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-hi);
+  background: rgba(124, 92, 255, 0.12);
+  color: #e9ecff;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.preset-chip:hover {
+  background: rgba(124, 92, 255, 0.32);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+/* Safe Zone Overlay (#7) */
+.safe-zone-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.sz-top {
+  height: 11%;
+  background: rgba(255, 59, 92, 0.22);
+  border-bottom: 1px dashed rgba(255, 110, 135, 0.85);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 6px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.9);
+}
+.sz-right-zone {
+  position: absolute;
+  right: 0;
+  top: 42%;
+  bottom: 22%;
+  width: 19%;
+  background: rgba(255, 59, 92, 0.22);
+  border-left: 1px dashed rgba(255, 110, 135, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sz-right-zone span {
+  writing-mode: vertical-rl;
+  font-size: 9px;
+  font-weight: 700;
+  color: #ffd0d8;
+}
+.sz-bottom-zone {
+  height: 22%;
+  background: rgba(255, 59, 92, 0.24);
+  border-top: 1px dashed rgba(255, 110, 135, 0.85);
+  padding: 8px 22% 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+  font-size: 9.5px;
+  color: rgba(255, 255, 255, 0.92);
+}
+.sz-handle { font-weight: 800; }
+.sz-desc { opacity: 0.85; }
+.sz-music { opacity: 0.8; font-size: 9px; }
+
+/* Batch Queue (#11) */
+.batch-queue-wrap {
+  margin-top: 10px;
+}
+.batch-status-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 170px;
+  overflow-y: auto;
+}
+.batch-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.batch-item-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* Webcam Crop Drawer (#14) */
+.webcam-canvas-wrap {
+  width: 100%;
+  background: #080a12;
+  border-radius: 12px;
+  border: 1px solid var(--border-hi);
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+}
+#webcamCropCanvas {
+  max-width: 100%;
+  height: auto;
+  cursor: crosshair;
+  display: block;
+}
+
+/* Dashboard Tabs + Calendar (#19) + Disk (#18) */
+.dash-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+.dash-tab {
+  padding: 7px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.dash-tab.active {
+  background: rgba(124, 92, 255, 0.25);
+  border-color: var(--accent);
+  color: #fff;
+}
+.plan-add-row {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 0.9fr 0.8fr auto;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.plan-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+}
+.plan-card.done {
+  opacity: 0.65;
+  border-color: rgba(0, 230, 138, 0.4);
+}
+.disk-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}

@@ -27,6 +27,7 @@ from backend.config import (
     FONTS_DIR,
     JOBS_DIR,
     MUSIC_DIR,
+    OUTROS_DIR,
     SATISFYING_DIR,
     STATIC_DIR,
     UPLOADS_DIR,
@@ -42,16 +43,27 @@ from backend.pipeline import (
     create_custom_clip,
     create_job,
     export_job_to_account_folder,
+    get_batch_status,
     get_job,
     get_studio_dashboard_stats,
     list_jobs,
     load_existing_jobs,
     mark_clip_published,
     rerender_single_clip,
+    start_batch_urls,
     start_processing,
 )
 from backend.remote import probe_remote_url
-from backend.renderer import probe_video
+from backend.renderer import extract_preview_frame, probe_video
+from backend.studio_extras import (
+    add_plan_item,
+    cleanup_old_sources,
+    cleanup_temp_cache,
+    delete_plan_item,
+    get_disk_usage_stats,
+    list_plan_items,
+    update_plan_item,
+)
 
 app = FastAPI(title="TikCut Studio", version="1.0.0")
 
@@ -102,6 +114,10 @@ class ProcessRequest(BaseModel):
     satisfying_video_id: Optional[str] = Field(default=None)
     uniquify_video: bool = Field(default=False)
     auto_cover: bool = Field(default=False)
+    webcam_rect: Optional[Dict[str, float]] = Field(default=None)
+    enable_outro: bool = Field(default=False)
+    outro_id: Optional[str] = Field(default=None)
+    manual_timecodes: Optional[str] = Field(default=None)
     search_chat_activity: bool = Field(default=True)
     search_laughter: bool = Field(default=True)
     use_ai_director: bool = Field(default=True)
@@ -143,6 +159,9 @@ class RerenderRequest(BaseModel):
     satisfying_video_id: Optional[str] = Field(default=None)
     uniquify_video: bool = Field(default=False)
     auto_cover: bool = Field(default=False)
+    webcam_rect: Optional[Dict[str, float]] = Field(default=None)
+    enable_outro: bool = Field(default=False)
+    outro_id: Optional[str] = Field(default=None)
     edited_transcript: Optional[str] = Field(default=None)
     edited_hook_text: Optional[str] = Field(default=None)
     trim_start: Optional[float] = Field(default=None)
@@ -744,3 +763,135 @@ def api_rerender_clip(job_id: str, clip_id: str, req: RerenderRequest) -> Dict[s
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка перерендера: {exc}")
+
+
+# =====================================================================
+# v2.2.0 Endpoints: Custom Webcam Frame (#14), Outro CTA (#20),
+# Batch URL Queue (#11), Disk Manager (#18), Content Plan (#19)
+# =====================================================================
+
+@app.get("/api/jobs/{job_id}/preview-frame")
+def api_job_preview_frame(job_id: str) -> FileResponse:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор")
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Проект не найден")
+    jdir = JOBS_DIR / job_id
+    frame_jpg = jdir / "preview_frame.jpg"
+    if not frame_jpg.exists():
+        vpath_str = job.get("video_path")
+        if vpath_str and Path(vpath_str).exists():
+            extract_preview_frame(Path(vpath_str), frame_jpg)
+        else:
+            raise HTTPException(status_code=404, detail="Для видео по ссылке сначала нажмите предпросмотр или используйте готовый клип")
+    return FileResponse(path=str(frame_jpg), media_type="image/jpeg")
+
+
+@app.get("/api/outros")
+def api_list_outros() -> Dict[str, Any]:
+    items = []
+    for f in sorted(OUTROS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.is_file() and f.suffix.lower() in (".mp4", ".mov", ".webm", ".png", ".jpg", ".jpeg", ".webp"):
+            items.append({"id": f.name, "name": f.stem, "ext": f.suffix.lower()})
+    return {"items": items}
+
+
+@app.post("/api/outros")
+async def api_upload_outro(file: UploadFile = File(...)) -> Dict[str, Any]:
+    ext = Path(file.filename or "outro.mp4").suffix.lower()
+    if ext not in (".mp4", ".mov", ".webm", ".png", ".jpg", ".jpeg", ".webp"):
+        raise HTTPException(status_code=400, detail="Поддерживаются MP4, MOV, WEBM, PNG, JPG, WEBP")
+    safe_stem = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ_-]+", "_", Path(file.filename or "outro").stem)[:36] or "outro"
+    fname = f"{safe_stem}_{uuid.uuid4().hex[:6]}{ext}"
+    dest = OUTROS_DIR / fname
+    with dest.open("wb") as out:
+        shutil.copyfileobj(file.file, out)
+    return {"id": fname, "name": safe_stem, "ext": ext}
+
+
+class BatchUrlsRequest(BaseModel):
+    urls: List[str]
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/batch-urls")
+def api_start_batch_urls(req: BatchUrlsRequest) -> Dict[str, Any]:
+    try:
+        return start_batch_urls(req.urls, req.options)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.get("/api/batch-urls")
+def api_get_batch_urls() -> Dict[str, Any]:
+    return get_batch_status()
+
+
+@app.get("/api/disk")
+def api_disk_usage() -> Dict[str, Any]:
+    return get_disk_usage_stats()
+
+
+class CleanupSourcesRequest(BaseModel):
+    older_than_days: int = Field(default=7, ge=0, le=365)
+
+
+@app.post("/api/disk/cleanup-sources")
+def api_cleanup_sources(req: CleanupSourcesRequest) -> Dict[str, Any]:
+    return cleanup_old_sources(older_than_days=req.older_than_days)
+
+
+@app.post("/api/disk/cleanup-cache")
+def api_cleanup_cache() -> Dict[str, Any]:
+    return cleanup_temp_cache()
+
+
+class PlanCreateRequest(BaseModel):
+    title: str
+    account_id: str = ""
+    account_name: str = "Основной"
+    platform: str = "tiktok"
+    scheduled_date: str = ""
+    scheduled_time: str = "18:00"
+    job_id: str = ""
+    clip_id: str = ""
+    notes: str = ""
+
+
+class PlanUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    account_id: Optional[str] = None
+    account_name: Optional[str] = None
+    platform: Optional[str] = None
+    scheduled_date: Optional[str] = None
+    scheduled_time: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/plan")
+def api_list_plan() -> Dict[str, Any]:
+    return {"items": list_plan_items()}
+
+
+@app.post("/api/plan")
+def api_add_plan(req: PlanCreateRequest) -> Dict[str, Any]:
+    return add_plan_item(**req.model_dump())
+
+
+@app.put("/api/plan/{item_id}")
+def api_update_plan(item_id: str, req: PlanUpdateRequest) -> Dict[str, Any]:
+    updated = update_plan_item(item_id, req.model_dump(exclude_none=True))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    return updated
+
+
+@app.delete("/api/plan/{item_id}")
+def api_delete_plan(item_id: str) -> Dict[str, Any]:
+    if not delete_plan_item(item_id):
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    return {"ok": True}
