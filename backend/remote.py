@@ -288,14 +288,36 @@ def _parse_vtt(raw: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
 def _heatmap_score_in_window(heatmap: List[Dict[str, Any]], start: float, end: float) -> float:
     if not heatmap:
         return 0.0
-    vals = [
-        float(h.get("value", 0.0))
-        for h in heatmap
-        if float(h.get("end_time", 0.0)) >= start and float(h.get("start_time", 0.0)) <= end
+    dur = max(1.0, end - start)
+    is_twitch = any(h.get("source") == "twitch_chat" for h in heatmap[:5])
+    # For Twitch chat, chat lags 4-8s behind the actual joke, so also look 6s past clip end!
+    look_end = end + 6.0 if is_twitch else end
+    matched = [
+        h for h in heatmap
+        if float(h.get("end_time", 0.0)) >= start and float(h.get("start_time", 0.0)) <= look_end
     ]
-    if not vals:
+    if not matched:
         return 0.0
-    return min(1.0, 0.55 * max(vals) + 0.45 * (sum(vals) / len(vals)))
+
+    best_h = max(matched, key=lambda h: float(h.get("value", 0.0)))
+    max_val = float(best_h.get("value", 0.0))
+    avg_val = sum(float(h.get("value", 0.0)) for h in matched) / len(matched)
+    base = 0.65 * max_val + 0.35 * avg_val
+
+    if is_twitch:
+        # Reward clips where the chat explosion hits in the 2nd half (40%..105%) so we capture the setup + joke!
+        # Penalize clips that start RIGHT AT or AFTER the chat explosion (missing the actual funny moment).
+        peak_t = float(best_h.get("start_time", start))
+        rel_pos = (peak_t - start) / dur
+        if 0.38 <= rel_pos <= 1.15:
+            pos_mult = 1.08
+        elif rel_pos < 0.22:
+            pos_mult = 0.62
+        else:
+            pos_mult = 0.88
+        return min(1.0, base * pos_mult)
+
+    return min(1.0, base)
 
 
 def find_remote_highlights(
@@ -365,6 +387,7 @@ def find_remote_highlights(
             search_chat_activity=search_chat_activity,
             search_laughter=search_laughter,
             audio_laughter_score=a_sc,
+            has_transcript=bool(segments),
         )
         candidates.append(
             {
@@ -533,15 +556,18 @@ def _score_remote_window(
     search_chat_activity: bool = True,
     search_laughter: bool = True,
     audio_laughter_score: float = 0.0,
+    has_transcript: bool = True,
 ) -> Dict[str, Any]:
     duration = max(1.0, end - start)
     hm_score = _heatmap_score_in_window(heatmap, start, end) if search_chat_activity else 0.0
 
-    # Speech pacing + hard penalty for wordless/music-only segments when transcript exists!
+    # Speech pacing + hard penalty for wordless/music-only segments ONLY when transcript exists!
     word_count = len(window_words) if window_words else len(text.split())
     wps = word_count / duration
     wordless_penalty = 0.0
-    if word_count == 0 and not text.strip():
+    if not has_transcript:
+        speech_score = 0.55
+    elif word_count == 0 and not text.strip():
         speech_score = 0.10
         wordless_penalty = 0.45
     elif word_count < 6 or wps < 0.35:
@@ -564,8 +590,10 @@ def _score_remote_window(
             edge_penalty = 0.14
 
     has_audio_sig = audio_laughter_score > 0.01
+    synergy_bonus = 0.16 if (has_audio_sig and audio_laughter_score >= 0.45 and hm_score >= 0.50) else 0.0
+
     if has_audio_sig and heatmap and search_chat_activity and search_laughter:
-        raw_total = 0.36 * audio_laughter_score + 0.34 * hm_score + 0.18 * comedy_score + 0.07 * hook_score + 0.05 * speech_score - ad_penalty - edge_penalty
+        raw_total = 0.36 * audio_laughter_score + 0.34 * hm_score + 0.18 * comedy_score + 0.07 * hook_score + 0.05 * speech_score + synergy_bonus - ad_penalty - edge_penalty
     elif has_audio_sig and search_laughter:
         raw_total = 0.52 * audio_laughter_score + 0.26 * comedy_score + 0.12 * hook_score + 0.10 * speech_score - ad_penalty - edge_penalty
     elif heatmap and search_chat_activity:
