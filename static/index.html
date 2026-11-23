@@ -113,9 +113,33 @@
           </div>
 
           <div class="batch-queue-wrap">
-            <button id="btnToggleBatch" type="button" class="btn btn-ghost btn-sm">
-              📥 Пакетная очередь ссылок (на ночь)
-            </button>
+            <div class="music-row" style="flex-wrap: wrap;">
+              <button id="btnToggleBatch" type="button" class="btn btn-ghost btn-sm">
+                📥 Пакетная очередь ссылок (на ночь)
+              </button>
+              <button id="btnToggleNetOpts" type="button" class="btn btn-ghost btn-sm">
+                🌐 Прокси / Cookies (YouTube)
+              </button>
+            </div>
+            <div id="netOptsBox" class="sub-box hidden" style="margin-top: 8px;">
+              <div class="form-grid">
+                <div class="field">
+                  <label for="ytCookiesSelect">Cookies из браузера (от ошибки «Sign in / Bot»)</label>
+                  <select id="ytCookiesSelect">
+                    <option value="">Без cookies</option>
+                    <option value="chrome">Google Chrome</option>
+                    <option value="edge">Microsoft Edge</option>
+                    <option value="firefox">Mozilla Firefox</option>
+                    <option value="safari">Apple Safari</option>
+                    <option value="brave">Brave</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="ytProxyInput">Прокси (опционально, http:// или socks5://)</label>
+                  <input id="ytProxyInput" type="text" placeholder="http://user:pass@ip:port или socks5://..." autocomplete="off" />
+                </div>
+              </div>
+            </div>
             <div id="batchQueueBox" class="sub-box hidden" style="margin-top: 8px;">
               <div class="field">
                 <label for="batchUrlsInput">Вставьте до 15 ссылок (по одной на строку) — обработаются подряд с текущими настройками</label>
@@ -173,10 +197,12 @@
         </div>
 
         <div class="preset-library-bar" id="presetLibraryBar">
-          <span class="preset-lib-label">🎨 Шаблоны:</span>
-          <button type="button" class="preset-chip" data-preset="streamer">🎮 Стример Twitch</button>
-          <button type="button" class="preset-chip" data-preset="hormozi">💼 Хормози</button>
+          <span class="preset-lib-label">📦 Ниши под ключ:</span>
+          <button type="button" class="preset-chip" data-preset="streamer">🎮 Игровой Twitch</button>
+          <button type="button" class="preset-chip" data-preset="irl">📸 IRL / Стрим</button>
           <button type="button" class="preset-chip" data-preset="podcast">🎙 Подкаст</button>
+          <button type="button" class="preset-chip" data-preset="cinema">🎬 Кино-нарезки</button>
+          <button type="button" class="preset-chip" data-preset="hormozi">💰 Крипта / Хормози</button>
           <button type="button" class="preset-chip" data-preset="minimal">✨ Минимал Reels</button>
           <button type="button" class="preset-chip" data-preset="brainrot">🧠 Brainrot</button>
         </div>
@@ -359,6 +385,20 @@
               <span class="switch-label">🎬 Аутро (CTA в конце клипа)</span>
               <span class="switch"><input id="outroToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
+            <label class="switch-item">
+              <span class="switch-label">🌡️ Тихий фон (не нагружать ПК)</span>
+              <span class="switch"><input id="lowCpuToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+          </div>
+
+          <div class="sub-box" style="margin-bottom: 12px;">
+            <div class="music-row" style="flex-wrap: wrap;">
+              <button id="btnOpenBlurBox" type="button" class="btn btn-secondary btn-sm">
+                🌫️ Замазать область на экране (чужой баннер / ник / чат)
+              </button>
+              <span id="blurRectBadge" class="badge hidden">✅ Область цензуры задана</span>
+              <button id="btnResetBlurRect" type="button" class="btn btn-ghost btn-sm hidden">Сбросить</button>
+            </div>
           </div>
 
           <div id="outroBox" class="sub-box hidden" style="margin-bottom: 12px;">
@@ -602,6 +642,9 @@
           <p id="resultsMeta" class="results-meta">Отобраны самые динамичные и эмоциональные моменты</p>
         </div>
         <div class="results-header-actions">
+          <button id="btnBestOf60s" type="button" class="btn btn-secondary hidden">
+            ⚡ Best-Of 60с (крики/смех)
+          </button>
           <button id="btnCompileSelected" type="button" class="btn btn-secondary hidden">
             🎞 Склеить выбранные (<span id="selectedClipsCount">0</span>)
           </button>

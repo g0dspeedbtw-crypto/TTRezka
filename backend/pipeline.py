@@ -246,6 +246,8 @@ def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str
         "cover_title": hook_title,
         "webcam_rect": options.get("webcam_rect") if isinstance(options.get("webcam_rect"), dict) else None,
         "outro_path": _resolve_outro_path(options.get("outro_id")) if options.get("enable_outro") else None,
+        "blur_rect": options.get("blur_rect") if isinstance(options.get("blur_rect"), dict) else None,
+        "low_cpu_mode": bool(options.get("low_cpu_mode", False)),
     }
 
 
@@ -460,6 +462,7 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             hl_out["trim_end"] = round(seg_dur, 2)
             hl_out["version"] = int(time.time())
             hl_out["file_size_mb"] = round(out_mp4.stat().st_size / (1024 * 1024), 2)
+            hl_out["ad_banner_id"] = options.get("ad_banner_id") if options.get("enable_ad_banner") else None
             rendered_clips.append(hl_out)
 
             _update_job(job_id, clips=rendered_clips, words_count=total_recognized_words)
@@ -1143,17 +1146,20 @@ def export_job_to_account_folder(job_id: str, account_name: str = "General") -> 
 
 
 def get_studio_dashboard_stats() -> Dict[str, Any]:
-    """Feature #17: Studio-wide analytics across all jobs, clips, accounts and social platforms."""
+    """Feature #17 & #48: Studio-wide analytics across jobs, clips, accounts, platforms & ad integrations."""
     all_jobs = list_jobs(limit=200)
     accounts = list_accounts()
     total_clips = 0
     pub_tiktok = 0
     pub_youtube = 0
     pub_instagram = 0
+    ad_counts: Dict[str, Dict[str, int]] = {}
     for j in all_jobs:
+        job_ad_fallback = (j.get("options") or {}).get("ad_banner_id") if (j.get("options") or {}).get("enable_ad_banner") else None
         for c in j.get("clips") or []:
             total_clips += 1
-            for p in c.get("published_to") or []:
+            pubs = c.get("published_to") or []
+            for p in pubs:
                 plat = p.get("platform", "tiktok")
                 if plat == "youtube":
                     pub_youtube += 1
@@ -1161,6 +1167,17 @@ def get_studio_dashboard_stats() -> Dict[str, Any]:
                     pub_instagram += 1
                 else:
                     pub_tiktok += 1
+            ad_id = c.get("ad_banner_id") or job_ad_fallback
+            if ad_id:
+                rec = ad_counts.setdefault(ad_id, {"rendered": 0, "published": 0})
+                rec["rendered"] += 1
+                if pubs:
+                    rec["published"] += len(pubs)
+
+    ad_stats = [
+        {"banner_id": k, "rendered": v["rendered"], "published": v["published"]}
+        for k, v in sorted(ad_counts.items(), key=lambda x: x[1]["rendered"], reverse=True)
+    ]
 
     return {
         "total_projects": len(all_jobs),
@@ -1170,8 +1187,126 @@ def get_studio_dashboard_stats() -> Dict[str, Any]:
         "published_instagram": pub_instagram,
         "accounts_count": len(accounts),
         "accounts": accounts,
+        "ad_stats": ad_stats,
         "exports_dir": str(EXPORTS_DIR.resolve()),
     }
+
+
+def create_best_of_60s_clip(job_id: str, options: Dict[str, Any]) -> Dict[str, Any]:
+    """Feature #44: Auto-compile the top 8-9 loudest 5.5s laughter/scream bursts into a ~50s Best-Of montage."""
+    job = get_job(job_id)
+    if not job:
+        raise ValueError("Проект не найден")
+    jdir = _job_dir(job_id)
+    is_remote = job.get("source_type") == "remote"
+    total_dur = float((job.get("video_meta") or {}).get("duration") or 0)
+
+    # Collect peak centers from local/lightweight audio if available, otherwise from existing clips
+    peaks: List[float] = []
+    wav_cand = jdir / "audio.wav"
+    if not wav_cand.exists():
+        wav_cand = jdir / "light_audio.wav"
+    if wav_cand.exists():
+        try:
+            rms, burst, bsec = compute_audio_features(wav_cand, bin_sec=0.25)
+            peaks = _find_audio_peak_times(rms, burst, bsec, top_k=14)
+        except Exception:
+            peaks = []
+
+    # Space out peaks by at least 7 seconds and keep up to 9 bursts (9 * 5.5s ≈ 49.5s)
+    chosen: List[float] = []
+    for p in peaks:
+        if all(abs(p - c) >= 7.0 for c in chosen):
+            chosen.append(p)
+        if len(chosen) >= 9:
+            break
+
+    # Fallback: take center of each rendered clip if no audio file is present
+    if len(chosen) < 2:
+        clips = job.get("clips") or []
+        if not clips:
+            raise ValueError("Нет аудио или готовых клипов для сборки Best-Of")
+        chosen = sorted(
+            [float(c.get("start", 0)) + float(c.get("duration", 10)) * 0.5 for c in clips[:9]]
+        )
+    else:
+        chosen.sort()
+
+    burst_dur = 5.5
+    part_paths: List[Path] = []
+    r_kwargs = _extract_render_kwargs(options, "⚡ BEST-OF: ЛУЧШИЕ КРИКИ И СМЕХ")
+    r_kwargs["auto_cover"] = False
+    r_kwargs["outro_path"] = None
+    r_kwargs["enable_subtitles"] = False
+
+    if is_remote:
+        remote_url = job.get("remote_url") or ""
+        for idx, center in enumerate(chosen, start=1):
+            s = max(0.0, center - burst_dur * 0.5)
+            e = min(total_dur, s + burst_dur) if total_dur > 0 else (s + burst_dur)
+            if e - s < 2.0:
+                continue
+            raw_p = jdir / f"bestof_raw_{idx}.mp4"
+            out_p = jdir / f"bestof_part_{idx}.mp4"
+            th_p = jdir / f"bestof_part_{idx}.jpg"
+            try:
+                download_clip_segment(remote_url, s, e, raw_p)
+                seg_d = float(probe_video(raw_p).get("duration") or (e - s))
+                render_clip(source_video=raw_p, output_mp4=out_p, thumb_jpg=th_p, clip_start=0.0, clip_end=seg_d, words=[], **r_kwargs)
+                part_paths.append(out_p)
+            finally:
+                raw_p.unlink(missing_ok=True)
+                th_p.unlink(missing_ok=True)
+    else:
+        vpath = Path(job.get("video_path") or "")
+        if not vpath.exists():
+            raise ValueError("Исходный видеофайл не найден (возможно, он был удалён в менеджере диска)")
+        for idx, center in enumerate(chosen, start=1):
+            s = max(0.0, center - burst_dur * 0.5)
+            e = min(total_dur, s + burst_dur) if total_dur > 0 else (s + burst_dur)
+            if e - s < 2.0:
+                continue
+            out_p = jdir / f"bestof_part_{idx}.mp4"
+            th_p = jdir / f"bestof_part_{idx}.jpg"
+            render_clip(source_video=vpath, output_mp4=out_p, thumb_jpg=th_p, clip_start=s, clip_end=e, words=[], **r_kwargs)
+            part_paths.append(out_p)
+            th_p.unlink(missing_ok=True)
+
+    if len(part_paths) < 2:
+        raise ValueError("Не удалось собрать достаточно ярких моментов для Best-Of")
+
+    best_id = f"clip_bestof_{int(time.time())}"
+    out_mp4 = jdir / f"{best_id}.mp4"
+    out_thumb = jdir / f"{best_id}.jpg"
+    try:
+        merge_clips_compilation(part_paths, out_mp4, out_thumb)
+    finally:
+        for p in part_paths:
+            p.unlink(missing_ok=True)
+
+    meta = probe_video(out_mp4)
+    title = f"⚡ BEST-OF: {len(part_paths)} лучших криков и смеха!"
+    best_clip = {
+        "id": best_id,
+        "index": 0,
+        "start": 0.0,
+        "end": round(float(meta.get("duration") or 0), 2),
+        "duration": round(float(meta.get("duration") or 0), 2),
+        "title": title,
+        "hook_text": title,
+        "transcript": f"Авто-нарезка {len(part_paths)} самых громких моментов смеха и эмоций со всего стрима.",
+        "viral_score": 99,
+        "tags": ["⚡ Best-Of 60с", "😂 Топ смех/крики"],
+        "tiktok_caption": generate_tiktok_caption(title, "", ["⚡ Best-Of"], job.get("original_filename", "")),
+        "version": int(time.time()),
+        "file_size_mb": round(out_mp4.stat().st_size / (1024 * 1024), 2),
+        "ad_banner_id": options.get("ad_banner_id") if options.get("enable_ad_banner") else None,
+    }
+    with _LOCK:
+        live_job = _JOBS[job_id]
+        live_job.setdefault("clips", []).insert(0, best_clip)
+        _save_job(live_job)
+    return best_clip
 
 
 # =====================================================================

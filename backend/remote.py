@@ -12,6 +12,7 @@ import numpy as np
 import yt_dlp
 from yt_dlp.utils import download_range_func
 
+from backend.config import load_settings
 from backend.highlights import (
     _find_audio_peak_times,
     _make_clip_title,
@@ -19,6 +20,18 @@ from backend.highlights import (
     score_russian_text_fun_and_hooks,
 )
 from backend.twitch_chat import analyze_twitch_chat_peaks, extract_twitch_vod_id
+
+
+def _apply_network_opts(ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
+    """Feature #59: Apply user-configured Proxy and Browser Cookies to yt-dlp."""
+    cfg = load_settings()
+    proxy = (cfg.get("yt_proxy") or "").strip()
+    if proxy:
+        ydl_opts["proxy"] = proxy
+    browser = (cfg.get("yt_cookies_browser") or "").strip().lower()
+    if browser in ("chrome", "edge", "firefox", "safari", "brave", "opera", "chromium"):
+        ydl_opts["cookiesfrombrowser"] = (browser,)
+    return ydl_opts
 
 
 def download_lightweight_audio(url: str, wav_path: Path) -> Optional[Path]:
@@ -31,14 +44,14 @@ def download_lightweight_audio(url: str, wav_path: Path) -> Optional[Path]:
 
     raw_base = wav_path.with_suffix(".raw_audio")
     out_tpl = str(raw_base) + ".%(ext)s"
-    ydl_opts = {
+    ydl_opts = _apply_network_opts({
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "format": "worstaudio[abr>=24]/bestaudio[abr<=64]/worstaudio/bestaudio",
         "outtmpl": out_tpl,
         "concurrent_fragment_downloads": 6,
-    }
+    })
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
@@ -68,13 +81,13 @@ def probe_remote_url(url: str) -> Dict[str, Any]:
     Fetch metadata, heatmap, chapters, and caption URLs from YouTube / Twitch VODs
     WITHOUT downloading the video file.
     """
-    ydl_opts = {
+    ydl_opts = _apply_network_opts({
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
         "extract_flat": False,
-    }
+    })
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
@@ -609,7 +622,7 @@ def download_clip_segment(
         output_mp4.unlink()
 
     out_tpl = str(output_mp4.with_suffix("")) + ".%(ext)s"
-    ydl_opts = {
+    ydl_opts = _apply_network_opts({
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
@@ -619,7 +632,7 @@ def download_clip_segment(
         "download_ranges": download_range_func(None, [(max(0.0, start), max(start + 1.0, end))]),
         "force_keyframes_at_cuts": True,
         "concurrent_fragment_downloads": 4,
-    }
+    })
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 

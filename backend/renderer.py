@@ -523,12 +523,33 @@ def _build_video_framing_chain(
     webcam_img_idx: Optional[int] = None,
     satisfying_idx: Optional[int] = None,
     webcam_rect: Optional[Dict[str, float]] = None,
+    blur_rect: Optional[Dict[str, float]] = None,
 ) -> str:
     """Build FFmpeg filter chain producing [base] at 1080x1920."""
+    # Feature #42: Optional Blur Box (Auto-Censor чужой баннер/ник/чат) applied on source video before framing
+    blur_prefix = ""
+    src_v = "[0:v]"
+    if (
+        isinstance(blur_rect, dict)
+        and float(blur_rect.get("w") or 0) >= 0.03
+        and float(blur_rect.get("h") or 0) >= 0.03
+    ):
+        bx = max(0.0, min(0.97, float(blur_rect.get("x", 0.0))))
+        by = max(0.0, min(0.97, float(blur_rect.get("y", 0.0))))
+        bw = max(0.03, min(1.0 - bx, float(blur_rect.get("w", 0.2))))
+        bh = max(0.03, min(1.0 - by, float(blur_rect.get("h", 0.15))))
+        blur_prefix = (
+            f"[0:v]split=2[b_orig][b_crop];"
+            f"[b_crop]crop=iw*{bw:.4f}:ih*{bh:.4f}:iw*{bx:.4f}:ih*{by:.4f},boxblur=18:3[b_blur];"
+            f"[b_orig][b_blur]overlay=x=W*{bx:.4f}:y=H*{by:.4f}[src_censored];"
+        )
+        src_v = "[src_censored]"
+
     # Feature #1: Bottom Satisfying / Brainrot Split-Screen (Top 1080x960 main + Bottom 1080x960 satisfying loop)
     if satisfying_idx is not None:
         return (
-            f"[0:v]scale={VIDEO_W}:960:force_original_aspect_ratio=increase,"
+            f"{blur_prefix}"
+            f"{src_v}scale={VIDEO_W}:960:force_original_aspect_ratio=increase,"
             f"crop={VIDEO_W}:960,setsar=1[top_main];"
             f"[{satisfying_idx}:v]scale={VIDEO_W}:960:force_original_aspect_ratio=increase,"
             f"crop={VIDEO_W}:960,setsar=1[bot_sat];"
@@ -537,7 +558,8 @@ def _build_video_framing_chain(
 
     if crop_mode == "blur_bg":
         return (
-            f"[0:v]split=2[vbg][vfg];"
+            f"{blur_prefix}"
+            f"{src_v}split=2[vbg][vfg];"
             f"[vbg]scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
             f"crop={VIDEO_W}:{VIDEO_H},boxblur=24:4,eq=brightness=-0.12[bg];"
             f"[vfg]scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=decrease[fg];"
@@ -549,9 +571,10 @@ def _build_video_framing_chain(
         # Bottom 62.5% (1080x1200) = gameplay
         if webcam_img_idx is not None:
             return (
+                f"{blur_prefix}"
                 f"[{webcam_img_idx}:v]scale={VIDEO_W}:720:force_original_aspect_ratio=increase,"
                 f"crop={VIDEO_W}:720,setsar=1[cam];"
-                f"[0:v]scale={VIDEO_W}:1200:force_original_aspect_ratio=increase,"
+                f"{src_v}scale={VIDEO_W}:1200:force_original_aspect_ratio=increase,"
                 f"crop={VIDEO_W}:1200,setsar=1[game];"
                 f"[cam][game]vstack=inputs=2,setsar=1[base];"
             )
@@ -565,7 +588,8 @@ def _build_video_framing_chain(
             rw = max(0.05, min(1.0 - rx, float(webcam_rect.get("w", 0.25))))
             rh = max(0.05, min(1.0 - ry, float(webcam_rect.get("h", 0.25))))
             return (
-                f"[0:v]split=2[vcam][vgame];"
+                f"{blur_prefix}"
+                f"{src_v}split=2[vcam][vgame];"
                 f"[vcam]crop=iw*{rw:.4f}:ih*{rh:.4f}:iw*{rx:.4f}:ih*{ry:.4f},"
                 f"scale={VIDEO_W}:720:force_original_aspect_ratio=increase,"
                 f"crop={VIDEO_W}:720,setsar=1[cam];"
@@ -578,7 +602,8 @@ def _build_video_framing_chain(
         x_expr = "0" if "left" in webcam_corner else f"iw*(1-{w_frac:.3f})"
         y_expr = "0" if "top" in webcam_corner else f"ih*(1-{h_frac:.3f})"
         return (
-            f"[0:v]split=2[vcam][vgame];"
+            f"{blur_prefix}"
+            f"{src_v}split=2[vcam][vgame];"
             f"[vcam]crop=iw*{w_frac:.3f}:ih*{h_frac:.3f}:{x_expr}:{y_expr},"
             f"scale={VIDEO_W}:720:force_original_aspect_ratio=increase,"
             f"crop={VIDEO_W}:720,setsar=1[cam];"
@@ -593,13 +618,15 @@ def _build_video_framing_chain(
             # Scale height to 1920, then crop 1080px wide centered on detected face X (clamped safely)
             x_expr = f"max(0,min(iw-{VIDEO_W},iw*{cx:.4f}-{VIDEO_W // 2}))"
             return (
-                f"[0:v]scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
+                f"{blur_prefix}"
+                f"{src_v}scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
                 f"crop={VIDEO_W}:{VIDEO_H}:{x_expr}:(ih-{VIDEO_H})/2,setsar=1[base];"
             )
 
     # Default 'fill' center crop
     return (
-        f"[0:v]scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
+        f"{blur_prefix}"
+        f"{src_v}scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
         f"crop={VIDEO_W}:{VIDEO_H},setsar=1[base];"
     )
 
@@ -906,6 +933,8 @@ def render_clip(
     cover_title: Optional[str] = None,
     webcam_rect: Optional[Dict[str, float]] = None,
     outro_path: Optional[Path] = None,
+    blur_rect: Optional[Dict[str, float]] = None,
+    low_cpu_mode: bool = False,
 ) -> Path:
     """
     Render a 1080x1920 9:16 TikTok MP4 clip with optional subtitles,
@@ -1051,6 +1080,7 @@ def render_clip(
             webcam_img_idx=webcam_img_idx,
             satisfying_idx=satisfying_idx,
             webcam_rect=webcam_rect,
+            blur_rect=blur_rect,
         )
         enhance_filters: List[str] = []
         if video_enhance:
@@ -1142,10 +1172,12 @@ def render_clip(
         meta_tag = f"tikcut_{uuid.uuid4().hex[:12]}" if uniquify_video else "tikcut_studio"
         used_enc_args = encoders[-1]
         last_err = ""
+        thread_args = ["-threads", "2"] if low_cpu_mode else []
         for enc_args in encoders:
             cmd = [
                 "ffmpeg",
                 "-y",
+                *thread_args,
                 *inputs,
                 "-filter_complex",
                 fc,

@@ -149,6 +149,15 @@
   const btnExportPresetJson = document.getElementById('btnExportPresetJson');
   const btnImportPresetJson = document.getElementById('btnImportPresetJson');
   const importPresetJsonInput = document.getElementById('importPresetJsonInput');
+  const btnToggleNetOpts = document.getElementById('btnToggleNetOpts');
+  const netOptsBox = document.getElementById('netOptsBox');
+  const ytCookiesSelect = document.getElementById('ytCookiesSelect');
+  const ytProxyInput = document.getElementById('ytProxyInput');
+  const lowCpuToggle = document.getElementById('lowCpuToggle');
+  const btnOpenBlurBox = document.getElementById('btnOpenBlurBox');
+  const blurRectBadge = document.getElementById('blurRectBadge');
+  const btnResetBlurRect = document.getElementById('btnResetBlurRect');
+  const btnBestOf60s = document.getElementById('btnBestOf60s');
   const ollamaRow = document.getElementById('ollamaRow');
   const ollamaSelect = document.getElementById('ollamaSelect');
   const geminiKeyInput = document.getElementById('geminiKeyInput');
@@ -270,6 +279,15 @@
     }
     if (watermarkInput && savedSettings.watermark_text) {
       watermarkInput.value = savedSettings.watermark_text;
+    }
+    if (ytProxyInput && savedSettings.yt_proxy) {
+      ytProxyInput.value = savedSettings.yt_proxy;
+    }
+    if (ytCookiesSelect && savedSettings.yt_cookies_browser) {
+      ytCookiesSelect.value = savedSettings.yt_cookies_browser;
+    }
+    if (lowCpuToggle && typeof savedSettings.low_cpu_mode === 'boolean') {
+      lowCpuToggle.checked = savedSettings.low_cpu_mode;
     }
     applyHardwareInfo(cfg.hardware);
 
@@ -419,6 +437,17 @@
         )
         .join('');
 
+      const adRows = (d.ad_stats || [])
+        .map(
+          (ad) => `
+          <div class="history-item" style="cursor:default;display:flex;justify-content:space-between;align-items:center;">
+            <div class="history-name">📢 ${escapeHtml(ad.banner_id)}</div>
+            <div class="history-meta">Отрендерено: <strong>${ad.rendered}</strong> • Опубликовано: <strong>${ad.published}</strong></div>
+          </div>
+        `
+        )
+        .join('');
+
       dashboardBody.innerHTML = `
         <div class="dash-stats-grid">
           <div class="dash-stat-card"><div class="dash-stat-val">${d.total_projects || 0}</div><div class="dash-stat-lbl">Проектов</div></div>
@@ -427,11 +456,16 @@
           <div class="dash-stat-card"><div class="dash-stat-val">${d.published_youtube || 0}</div><div class="dash-stat-lbl">▶ Shorts</div></div>
           <div class="dash-stat-card"><div class="dash-stat-val">${d.published_instagram || 0}</div><div class="dash-stat-lbl">📸 Reels</div></div>
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
           <strong style="font-size:13.5px;">Аккаунты студии (${d.accounts_count || 0})</strong>
-          <button id="btnOpenExportsRoot" type="button" class="btn btn-secondary btn-sm">📂 Открыть папку выгрузок</button>
+          <div style="display:flex;gap:6px;">
+            <a href="/api/dashboard/export-csv" download="tikcut_studio_report.csv" class="btn btn-secondary btn-sm">📋 Отчёт CSV / Excel</a>
+            <button id="btnOpenExportsRoot" type="button" class="btn btn-secondary btn-sm">📂 Папка выгрузок</button>
+          </div>
         </div>
-        <div class="history-list">${accRows || '<div class="history-meta">Аккаунты ещё не созданы</div>'}</div>
+        <div class="history-list" style="margin-bottom:12px;">${accRows || '<div class="history-meta">Аккаунты ещё не созданы</div>'}</div>
+        <strong style="font-size:13.5px;display:block;margin-bottom:8px;">📢 Учёт рекламных интеграций</strong>
+        <div class="history-list">${adRows || '<div class="history-meta">Пока нет клипов с рекламными баннерами</div>'}</div>
       `;
       const btnOpenExp = document.getElementById('btnOpenExportsRoot');
       if (btnOpenExp) {
@@ -592,6 +626,9 @@
     state.webcamRect = p.webcam_rect && typeof p.webcam_rect === 'object' ? p.webcam_rect : null;
     if (webcamRectBadge) webcamRectBadge.classList.toggle('hidden', !state.webcamRect);
     if (btnResetWebcamRect) btnResetWebcamRect.classList.toggle('hidden', !state.webcamRect);
+    state.blurRect = p.blur_rect && typeof p.blur_rect === 'object' ? p.blur_rect : null;
+    if (blurRectBadge) blurRectBadge.classList.toggle('hidden', !state.blurRect);
+    if (btnResetBlurRect) btnResetBlurRect.classList.toggle('hidden', !state.blurRect);
     updateLivePreview();
   }
 
@@ -1363,6 +1400,8 @@
       uniquify_video: !!(uniquifyToggle && uniquifyToggle.checked),
       auto_cover: !!(autoCoverToggle && autoCoverToggle.checked),
       webcam_rect: state.webcamRect || null,
+      blur_rect: state.blurRect || null,
+      low_cpu_mode: !!(lowCpuToggle && lowCpuToggle.checked),
       enable_outro: !!(outroToggle && outroToggle.checked),
       outro_id: outroSelect ? outroSelect.value || null : null,
       manual_timecodes: manualTimecodesInput ? (manualTimecodesInput.value || '').trim() || null : null,
@@ -1476,6 +1515,9 @@
         btnStart.disabled = false;
         if (btnShuffleMoments) btnShuffleMoments.disabled = false;
         refreshHistory();
+        if (job.status === 'completed') {
+          notifyRenderDone('TikCut Studio — Нарезки готовы!', `Создано клипов: ${(job.clips || []).length}`);
+        }
       }
     }, 1200);
   }
@@ -1674,10 +1716,12 @@
       btnDownloadAllZip.classList.remove('hidden');
       if (btnShuffleMoments) btnShuffleMoments.classList.remove('hidden');
       if (btnExportFolder) btnExportFolder.classList.remove('hidden');
+      if (btnBestOf60s) btnBestOf60s.classList.remove('hidden');
     } else {
       btnDownloadAllZip.classList.add('hidden');
       if (btnShuffleMoments) btnShuffleMoments.classList.add('hidden');
       if (btnExportFolder) btnExportFolder.classList.add('hidden');
+      if (btnBestOf60s) btnBestOf60s.classList.add('hidden');
     }
     clipsGrid.innerHTML = '';
 
@@ -2164,6 +2208,18 @@
       hook_position: 'between', hook_text_color: '#0c0e18', hook_bg_color: '#ffffff', hook_border_color: '#ffe600',
       jump_cuts: true, target_fps: 60, video_enhance: true, enable_satisfying_video: false, auto_cover: true,
     },
+    irl: {
+      subtitle_style: 'tiktok_bold', font_id: 'rubik', font_size: 'medium', position: 'lower_third',
+      crop_mode: 'face_track', enable_subtitles: true, uppercase: true, show_hook_banner: true,
+      hook_position: 'top', hook_text_color: '#ffffff', hook_bg_color: '#ff2e93', hook_border_color: '#ffffff',
+      jump_cuts: true, target_fps: 30, video_enhance: true, enable_satisfying_video: false, auto_cover: true,
+    },
+    cinema: {
+      subtitle_style: 'classic', font_id: 'oswald', font_size: 'medium', position: 'bottom',
+      crop_mode: 'blur_bg', enable_subtitles: true, uppercase: false, show_hook_banner: true,
+      hook_position: 'top', hook_text_color: '#ffe600', hook_bg_color: 'transparent', hook_border_color: '#000000',
+      jump_cuts: false, target_fps: 30, video_enhance: true, enable_satisfying_video: false, auto_cover: true,
+    },
     hormozi: {
       subtitle_style: 'hormozi', font_id: 'montserrat', font_size: 'large', position: 'center',
       crop_mode: 'face_track', enable_subtitles: true, uppercase: true, show_hook_banner: true,
@@ -2297,7 +2353,8 @@
     });
   }
 
-  // #14 Interactive Webcam Crop Drawer Modal
+  // #14 Interactive Webcam Crop & #42 Blur Box Drawer Modal
+  let cropModalMode = 'webcam'; // 'webcam' | 'blur'
   let cropImg = null;
   let draftRect = null;
   let draggingCrop = false;
@@ -2319,21 +2376,32 @@
       ctx.textAlign = 'center';
       ctx.fillText('Макет 16:9 (загрузите локальное видео для живого кадра)', W / 2, H / 2);
     }
-    const r = draftRect || state.webcamRect;
+    const r = draftRect || (cropModalMode === 'blur' ? state.blurRect : state.webcamRect);
     if (r && r.w > 0.02 && r.h > 0.02) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-      ctx.fillRect(0, 0, W, H);
       const rx = r.x * W, ry = r.y * H, rw = r.w * W, rh = r.h * H;
-      if (cropImg && cropImg.complete && cropImg.naturalWidth) {
-        ctx.drawImage(cropImg, r.x * cropImg.naturalWidth, r.y * cropImg.naturalHeight, r.w * cropImg.naturalWidth, r.h * cropImg.naturalHeight, rx, ry, rw, rh);
+      if (cropModalMode === 'blur') {
+        ctx.fillStyle = 'rgba(255, 59, 92, 0.35)';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.strokeStyle = '#ff3b5c';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(rx, ry, rw, rh);
+        if (webcamCropCoords) {
+          webcamCropCoords.textContent = `Цензура (Blur): X=${Math.round(r.x * 100)}%, Y=${Math.round(r.y * 100)}%, Ш=${Math.round(r.w * 100)}%, В=${Math.round(r.h * 100)}%`;
+        }
       } else {
-        ctx.clearRect(rx, ry, rw, rh);
-      }
-      ctx.strokeStyle = '#ffe600';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(rx, ry, rw, rh);
-      if (webcamCropCoords) {
-        webcamCropCoords.textContent = `Вебка: X=${Math.round(r.x * 100)}%, Y=${Math.round(r.y * 100)}%, Ш=${Math.round(r.w * 100)}%, В=${Math.round(r.h * 100)}%`;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.fillRect(0, 0, W, H);
+        if (cropImg && cropImg.complete && cropImg.naturalWidth) {
+          ctx.drawImage(cropImg, r.x * cropImg.naturalWidth, r.y * cropImg.naturalHeight, r.w * cropImg.naturalWidth, r.h * cropImg.naturalHeight, rx, ry, rw, rh);
+        } else {
+          ctx.clearRect(rx, ry, rw, rh);
+        }
+        ctx.strokeStyle = '#ffe600';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(rx, ry, rw, rh);
+        if (webcamCropCoords) {
+          webcamCropCoords.textContent = `Вебка: X=${Math.round(r.x * 100)}%, Y=${Math.round(r.y * 100)}%, Ш=${Math.round(r.w * 100)}%, В=${Math.round(r.h * 100)}%`;
+        }
       }
     }
   }
@@ -2342,19 +2410,35 @@
     if (webcamCropModal) webcamCropModal.classList.add('hidden');
   }
 
+  function openCanvasDrawer(mode) {
+    cropModalMode = mode;
+    draftRect = mode === 'blur'
+      ? (state.blurRect ? { ...state.blurRect } : null)
+      : (state.webcamRect ? { ...state.webcamRect } : null);
+    const titleEl = webcamCropModal?.querySelector('h3');
+    const subEl = webcamCropModal?.querySelector('.modal-sub');
+    if (titleEl) {
+      titleEl.textContent = mode === 'blur' ? '🌫️ Выделение области цензуры (Blur)' : '📐 Выделение веб-камеры стримера';
+    }
+    if (subEl) {
+      subEl.textContent = mode === 'blur'
+        ? 'Обведите прямоугольником чужой баннер, ник или чат — он будет размыт на всех клипах'
+        : 'Зажмите левую кнопку мыши и обведите прямоугольником вебку стримера на кадре';
+    }
+    cropImg = new Image();
+    cropImg.onload = redrawWebcamCanvas;
+    cropImg.onerror = redrawWebcamCanvas;
+    if (state.currentJobId) {
+      cropImg.src = `/api/jobs/${state.currentJobId}/preview-frame?t=${Date.now()}`;
+    } else {
+      redrawWebcamCanvas();
+    }
+    if (webcamCropModal) webcamCropModal.classList.remove('hidden');
+  }
+
   if (btnOpenWebcamCrop && webcamCropModal && webcamCropCanvas) {
-    btnOpenWebcamCrop.addEventListener('click', () => {
-      draftRect = state.webcamRect ? { ...state.webcamRect } : null;
-      cropImg = new Image();
-      cropImg.onload = redrawWebcamCanvas;
-      cropImg.onerror = redrawWebcamCanvas;
-      if (state.currentJobId) {
-        cropImg.src = `/api/jobs/${state.currentJobId}/preview-frame?t=${Date.now()}`;
-      } else {
-        redrawWebcamCanvas();
-      }
-      webcamCropModal.classList.remove('hidden');
-    });
+    btnOpenWebcamCrop.addEventListener('click', () => openCanvasDrawer('webcam'));
+    if (btnOpenBlurBox) btnOpenBlurBox.addEventListener('click', () => openCanvasDrawer('blur'));
 
     const getCanvasPos = (ev) => {
       const rect = webcamCropCanvas.getBoundingClientRect();
@@ -2386,22 +2470,39 @@
     if (webcamCropBackdrop) webcamCropBackdrop.addEventListener('click', closeWebcamCropModal);
     if (btnSaveWebcamCrop) {
       btnSaveWebcamCrop.addEventListener('click', () => {
-        if (!draftRect || draftRect.w < 0.05 || draftRect.h < 0.05) {
-          showToast('Обведите область вебки побольше');
+        if (!draftRect || draftRect.w < 0.03 || draftRect.h < 0.03) {
+          showToast('Обведите область побольше');
           return;
         }
-        state.webcamRect = {
+        const saved = {
           x: Number(draftRect.x.toFixed(4)),
           y: Number(draftRect.y.toFixed(4)),
           w: Number(draftRect.w.toFixed(4)),
           h: Number(draftRect.h.toFixed(4)),
         };
-        if (webcamRectBadge) webcamRectBadge.classList.remove('hidden');
-        if (btnResetWebcamRect) btnResetWebcamRect.classList.remove('hidden');
-        closeWebcamCropModal();
-        showToast('Область веб-камеры сохранена!');
+        if (cropModalMode === 'blur') {
+          state.blurRect = saved;
+          if (blurRectBadge) blurRectBadge.classList.remove('hidden');
+          if (btnResetBlurRect) btnResetBlurRect.classList.remove('hidden');
+          closeWebcamCropModal();
+          showToast('Область размытия (цензуры) сохранена!');
+        } else {
+          state.webcamRect = saved;
+          if (webcamRectBadge) webcamRectBadge.classList.remove('hidden');
+          if (btnResetWebcamRect) btnResetWebcamRect.classList.remove('hidden');
+          closeWebcamCropModal();
+          showToast('Область веб-камеры сохранена!');
+        }
       });
     }
+  }
+  if (btnResetBlurRect) {
+    btnResetBlurRect.addEventListener('click', () => {
+      state.blurRect = null;
+      if (blurRectBadge) blurRectBadge.classList.add('hidden');
+      btnResetBlurRect.classList.add('hidden');
+      showToast('Область цензуры сброшена');
+    });
   }
   if (btnResetWebcamRect) {
     btnResetWebcamRect.addEventListener('click', () => {
@@ -2423,6 +2524,15 @@
       const today = new Date().toISOString().slice(0, 10);
       const accOpts = (state.accounts || []).map((a) => `<option value="${escapeHtml(a.name)}">${escapeHtml(a.name)}</option>`).join('') || '<option value="Основной">Основной</option>';
       dashPlanBody.innerHTML = `
+        <div class="preset-library-bar" style="margin-bottom:10px;">
+          <span class="preset-lib-label">🧪 Лучшее время постинга:</span>
+          <button type="button" class="preset-chip btn-pick-time" data-t="08:30">🌅 RU 08:30</button>
+          <button type="button" class="preset-chip btn-pick-time" data-t="13:00">☀️ RU 13:00</button>
+          <button type="button" class="preset-chip btn-pick-time" data-t="18:30">🔥 RU 18:30 (Прайм)</button>
+          <button type="button" class="preset-chip btn-pick-time" data-t="21:00">🌙 RU 21:00</button>
+          <button type="button" class="preset-chip btn-pick-time" data-t="19:00">🇺🇸 US 19:00 МСК</button>
+          <button type="button" class="preset-chip btn-pick-time" data-t="22:00">🇺🇸 US 22:00 МСК</button>
+        </div>
         <div class="plan-add-row">
           <input id="planNewTitle" type="text" placeholder="Название клипа / идеи..." />
           <select id="planNewAcc">${accOpts}</select>
@@ -2447,6 +2557,13 @@
           `).join('') : '<div class="history-meta">Пока нет запланированных публикаций. Нажмите «📅 Добавить в контент-план» на любом клипе или добавьте выше.</div>'}
         </div>
       `;
+      dashPlanBody.querySelectorAll('.btn-pick-time').forEach((b) => {
+        b.addEventListener('click', () => {
+          const inp = document.getElementById('planNewTime');
+          if (inp) inp.value = b.dataset.t || '18:30';
+          showToast(`Выбрано прайм-время: ${b.dataset.t}`);
+        });
+      });
       const btnAdd = document.getElementById('btnPlanAdd');
       if (btnAdd) {
         btnAdd.addEventListener('click', async () => {
@@ -2540,6 +2657,99 @@
         if (key === 'plan') loadPlanTab();
         if (key === 'disk') loadDiskTab();
       });
+    });
+  }
+
+  // #56 System + Sound Notification when rendering completes
+  function notifyRenderDone(title, body) {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        const ctx = new AC();
+        const now = ctx.currentTime;
+        [523.25, 659.25, 783.99].forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, now + i * 0.11);
+          gain.gain.setValueAtTime(0.08, now + i * 0.11);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.11 + 0.35);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + i * 0.11);
+          osc.stop(now + i * 0.11 + 0.38);
+        });
+      }
+    } catch (_) {}
+    try {
+      if ('Notification' in window) {
+        if (Notification.permission === 'granted') {
+          new Notification(title, { body });
+        } else if (Notification.permission !== 'denied') {
+          Notification.requestPermission().then((p) => {
+            if (p === 'granted') new Notification(title, { body });
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  // #59 Proxy & Browser Cookies + #55 Quiet Mode settings persistence
+  if (btnToggleNetOpts && netOptsBox) {
+    btnToggleNetOpts.addEventListener('click', () => netOptsBox.classList.toggle('hidden'));
+  }
+  const saveNetSetting = (patch) => {
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).catch(() => {});
+  };
+  if (ytCookiesSelect) {
+    ytCookiesSelect.addEventListener('change', () => {
+      saveNetSetting({ yt_cookies_browser: ytCookiesSelect.value });
+      showToast(ytCookiesSelect.value ? `Cookies браузера: ${ytCookiesSelect.value}` : 'Cookies отключены');
+    });
+  }
+  if (ytProxyInput) {
+    let proxyTimer = null;
+    ytProxyInput.addEventListener('input', () => {
+      clearTimeout(proxyTimer);
+      proxyTimer = setTimeout(() => saveNetSetting({ yt_proxy: ytProxyInput.value.trim() }), 500);
+    });
+  }
+  if (lowCpuToggle) {
+    lowCpuToggle.addEventListener('change', () => {
+      saveNetSetting({ low_cpu_mode: lowCpuToggle.checked });
+      showToast(lowCpuToggle.checked ? '🌡️ Тихий фон включён (меньше нагрузки на ПК)' : '⚡ Полная мощность CPU/GPU');
+    });
+  }
+
+  // #44 Auto Best-Of 60s Montage button
+  if (btnBestOf60s) {
+    btnBestOf60s.addEventListener('click', async () => {
+      if (!state.currentJobId) return;
+      btnBestOf60s.disabled = true;
+      const origTxt = btnBestOf60s.textContent;
+      btnBestOf60s.textContent = '⏳ Сборка Best-Of 60с...';
+      try {
+        const res = await fetch(`/api/jobs/${state.currentJobId}/best-of-60s`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(getCurrentOptions(0)),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Не удалось собрать Best-Of');
+        const jRes = await fetch(`/api/jobs/${state.currentJobId}`);
+        if (jRes.ok) renderClips(await jRes.json());
+        notifyRenderDone('⚡ Best-Of 60с готов!', data.title || 'Монтаж лучших криков и смеха создан');
+        showToast('⚡ Best-Of 60с создан и добавлен первым!');
+      } catch (err) {
+        showToast(err.message || 'Ошибка сборки Best-Of');
+      } finally {
+        btnBestOf60s.disabled = false;
+        btnBestOf60s.textContent = origTxt;
+      }
     });
   }
 

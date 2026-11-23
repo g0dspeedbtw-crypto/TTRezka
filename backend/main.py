@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -39,6 +39,7 @@ from backend.config import (
 from backend.gemini_client import clean_api_key, test_gemini_key
 from backend.hardware import get_hardware_info
 from backend.pipeline import (
+    create_best_of_60s_clip,
     create_compilation_clip,
     create_custom_clip,
     create_job,
@@ -115,6 +116,8 @@ class ProcessRequest(BaseModel):
     uniquify_video: bool = Field(default=False)
     auto_cover: bool = Field(default=False)
     webcam_rect: Optional[Dict[str, float]] = Field(default=None)
+    blur_rect: Optional[Dict[str, float]] = Field(default=None)
+    low_cpu_mode: bool = Field(default=False)
     enable_outro: bool = Field(default=False)
     outro_id: Optional[str] = Field(default=None)
     manual_timecodes: Optional[str] = Field(default=None)
@@ -160,6 +163,8 @@ class RerenderRequest(BaseModel):
     uniquify_video: bool = Field(default=False)
     auto_cover: bool = Field(default=False)
     webcam_rect: Optional[Dict[str, float]] = Field(default=None)
+    blur_rect: Optional[Dict[str, float]] = Field(default=None)
+    low_cpu_mode: bool = Field(default=False)
     enable_outro: bool = Field(default=False)
     outro_id: Optional[str] = Field(default=None)
     edited_transcript: Optional[str] = Field(default=None)
@@ -182,6 +187,9 @@ class CheckGeminiKeyRequest(BaseModel):
 class SettingsUpdateRequest(BaseModel):
     gemini_api_key: Optional[str] = None
     watermark_text: Optional[str] = None
+    yt_proxy: Optional[str] = None
+    yt_cookies_browser: Optional[str] = None
+    low_cpu_mode: Optional[bool] = None
 
 
 @app.get("/api/settings")
@@ -191,11 +199,17 @@ def api_get_settings() -> Dict[str, Any]:
 
 @app.post("/api/settings")
 def api_save_settings(req: SettingsUpdateRequest) -> Dict[str, Any]:
-    updates = {}
+    updates: Dict[str, Any] = {}
     if req.gemini_api_key is not None:
         updates["gemini_api_key"] = clean_api_key(req.gemini_api_key)
     if req.watermark_text is not None:
         updates["watermark_text"] = req.watermark_text.strip()
+    if req.yt_proxy is not None:
+        updates["yt_proxy"] = req.yt_proxy.strip()
+    if req.yt_cookies_browser is not None:
+        updates["yt_cookies_browser"] = req.yt_cookies_browser.strip().lower()
+    if req.low_cpu_mode is not None:
+        updates["low_cpu_mode"] = bool(req.low_cpu_mode)
     return save_settings(updates)
 
 
@@ -895,3 +909,49 @@ def api_delete_plan(item_id: str) -> Dict[str, Any]:
     if not delete_plan_item(item_id):
         raise HTTPException(status_code=404, detail="Запись не найдена")
     return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/best-of-60s")
+def api_best_of_60s(job_id: str, req: RerenderRequest) -> Dict[str, Any]:
+    try:
+        return create_best_of_60s_clip(job_id=job_id, options=req.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка сборки Best-Of 60с: {exc}")
+
+
+@app.get("/api/dashboard/export-csv")
+def api_export_dashboard_csv() -> Response:
+    import csv
+    import datetime
+    import io
+
+    all_jobs = list_jobs(limit=300)
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow(["Дата", "Проект", "Клип", "Длительность (с)", "Оценка", "Рекламный баннер", "Опубликовано"])
+    for j in all_jobs:
+        dt = datetime.datetime.fromtimestamp(float(j.get("created_at") or 0)).strftime("%Y-%m-%d %H:%M") if j.get("created_at") else ""
+        proj = j.get("original_filename", j.get("job_id", ""))
+        job_ad = (j.get("options") or {}).get("ad_banner_id") if (j.get("options") or {}).get("enable_ad_banner") else ""
+        for c in j.get("clips") or []:
+            pubs = ", ".join(
+                f"{p.get('account_name', '')} ({p.get('platform', 'tiktok')})"
+                for p in (c.get("published_to") or [])
+            )
+            writer.writerow([
+                dt,
+                proj,
+                c.get("title", ""),
+                c.get("duration", ""),
+                c.get("viral_score", ""),
+                c.get("ad_banner_id") or job_ad or "",
+                pubs or "Нет",
+            ])
+    csv_bytes = ("\ufeff" + buf.getvalue()).encode("utf-8")
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="tikcut_studio_report.csv"'},
+    )
