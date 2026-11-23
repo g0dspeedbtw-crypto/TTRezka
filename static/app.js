@@ -2,6 +2,9 @@
   const state = {
     fonts: [],
     styles: [],
+    accounts: [],
+    activeAccountId: null,
+    accountSessions: {},
     currentJobId: null,
     pollTimer: null,
     selectedStyle: 'hormozi',
@@ -10,6 +13,27 @@
     previewWordIdx: 0,
     previewWords: ['ЭТОТ', 'МОМЕНТ', 'ВЗОРВАЛ', 'ТИКТОК!'],
   };
+
+  // Multi-Account TikTok Studio elements
+  const accountsPills = document.getElementById('accountsPills');
+  const activeAccountSub = document.getElementById('activeAccountSub');
+  const btnAddAccount = document.getElementById('btnAddAccount');
+  const btnSavePreset = document.getElementById('btnSavePreset');
+  const btnOpenTiktokLogin = document.getElementById('btnOpenTiktokLogin');
+  const btnEditAccount = document.getElementById('btnEditAccount');
+  const accountModal = document.getElementById('accountModal');
+  const accountBackdrop = document.getElementById('accountBackdrop');
+  const accountModalTitle = document.getElementById('accountModalTitle');
+  const btnCloseAccountModal = document.getElementById('btnCloseAccountModal');
+  const btnCancelAccount = document.getElementById('btnCancelAccount');
+  const btnSaveAccount = document.getElementById('btnSaveAccount');
+  const btnAccountLogout = document.getElementById('btnAccountLogout');
+  const btnAccountDelete = document.getElementById('btnAccountDelete');
+  const accNameInput = document.getElementById('accNameInput');
+  const accHandleInput = document.getElementById('accHandleInput');
+  const accHashtagsInput = document.getElementById('accHashtagsInput');
+  const accTemplateInput = document.getElementById('accTemplateInput');
+  const accColorInput = document.getElementById('accColorInput');
 
   // DOM elements
   const sourceTabs = document.getElementById('sourceTabs');
@@ -270,7 +294,265 @@
     await refreshMusicList();
     await refreshAvatarList();
     await refreshAdsList();
+    await refreshAccounts();
     await refreshHistory();
+
+    if (window.tikcutDesktop && window.tikcutDesktop.onTiktokSessionChanged) {
+      window.tikcutDesktop.onTiktokSessionChanged(() => {
+        refreshAccountSessions();
+      });
+    }
+  }
+
+  function getActiveAccount() {
+    return state.accounts.find((a) => a.id === state.activeAccountId) || null;
+  }
+
+  async function refreshAccountSessions() {
+    const desk = window.tikcutDesktop;
+    if (!desk || !desk.tiktokCheckSession) return;
+    for (const acc of state.accounts) {
+      try {
+        state.accountSessions[acc.id] = await desk.tiktokCheckSession(acc.id);
+      } catch (_) {
+        state.accountSessions[acc.id] = false;
+      }
+    }
+    renderAccountsBar();
+  }
+
+  async function refreshAccounts() {
+    try {
+      const res = await fetch('/api/accounts');
+      const data = await res.json();
+      state.accounts = data.accounts || [];
+      if (!state.activeAccountId && state.accounts.length > 0) {
+        state.activeAccountId = state.accounts[0].id;
+        applyAccountPreset(state.accounts[0]);
+      } else if (state.activeAccountId && !getActiveAccount()) {
+        state.activeAccountId = state.accounts[0]?.id || null;
+      }
+      renderAccountsBar();
+      await refreshAccountSessions();
+    } catch (_) {}
+  }
+
+  function renderAccountsBar() {
+    if (!accountsPills) return;
+    accountsPills.innerHTML = '';
+    const active = getActiveAccount();
+
+    btnSavePreset.classList.toggle('hidden', !active);
+    btnOpenTiktokLogin.classList.toggle('hidden', !active);
+    btnEditAccount.classList.toggle('hidden', !active);
+
+    if (active) {
+      const logged = !!state.accountSessions[active.id];
+      btnOpenTiktokLogin.textContent = logged ? '🟢 TikTok Studio' : '🔐 Войти в TikTok';
+      activeAccountSub.textContent = `Активный аккаунт: ${active.name} ${active.handle || ''} • Опубликовано: ${active.published_count || 0} • Хэштеги: ${active.default_hashtags || '—'}`;
+    } else {
+      activeAccountSub.textContent = 'Создайте один или несколько аккаунтов TikTok — у каждого свой пресет стиля, фото, баннер, хэштеги и вход в TikTok Studio';
+    }
+
+    state.accounts.forEach((acc) => {
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = `account-pill ${acc.id === state.activeAccountId ? 'active' : ''}`;
+      const logged = !!state.accountSessions[acc.id];
+      pill.innerHTML = `
+        <span class="acc-dot ${logged ? 'logged' : ''}" title="${logged ? 'Вход в TikTok выполнен' : 'Не авторизован'}"></span>
+        <span style="color:${acc.color || '#fff'}">●</span>
+        <span>${escapeHtml(acc.name)}</span>
+        ${acc.handle ? `<span style="color:var(--muted);font-weight:500;">${escapeHtml(acc.handle)}</span>` : ''}
+        <span class="acc-pub-count">${acc.published_count || 0}</span>
+      `;
+      pill.addEventListener('click', () => {
+        state.activeAccountId = acc.id;
+        applyAccountPreset(acc);
+        renderAccountsBar();
+        showToast(`Переключено на «${acc.name}» — пресет применён!`);
+      });
+      accountsPills.appendChild(pill);
+    });
+  }
+
+  function applyAccountPreset(acc) {
+    if (!acc || !acc.preset) return;
+    const p = acc.preset;
+    if (p.subtitle_style) {
+      state.selectedStyle = p.subtitle_style;
+      document.querySelectorAll('.style-card').forEach((el) => el.classList.toggle('active', el.dataset.id === p.subtitle_style));
+    }
+    if (p.font_id && fontSelect) {
+      state.selectedFont = p.font_id;
+      fontSelect.value = p.font_id;
+    }
+    if (p.font_size && fontSize) fontSize.value = p.font_size;
+    if (p.position && subPosition) subPosition.value = p.position;
+    if (p.crop_mode) {
+      state.cropMode = p.crop_mode;
+      cropModeGroup.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.value === p.crop_mode));
+      splitStreamSettings.classList.toggle('hidden', p.crop_mode !== 'split_stream');
+    }
+    if (typeof p.enable_subtitles === 'boolean' && enableSubtitlesToggle) enableSubtitlesToggle.checked = p.enable_subtitles;
+    if (typeof p.uppercase === 'boolean' && uppercaseToggle) uppercaseToggle.checked = p.uppercase;
+    if (typeof p.use_webcam_photo === 'boolean' && useWebcamPhotoToggle) {
+      useWebcamPhotoToggle.checked = p.use_webcam_photo;
+      webcamPhotoRow.classList.toggle('hidden', !p.use_webcam_photo);
+      webcamCropRow.classList.toggle('hidden', p.use_webcam_photo);
+    }
+    if (p.webcam_image_id && webcamPhotoSelect) webcamPhotoSelect.value = p.webcam_image_id;
+    if (p.webcam_corner && webcamCorner) webcamCorner.value = p.webcam_corner;
+    if (typeof p.show_hook_banner === 'boolean' && hookBannerToggle) hookBannerToggle.checked = p.show_hook_banner;
+    if (p.hook_position && hookPositionSelect) hookPositionSelect.value = p.hook_position;
+    if (p.hook_font_size && hookFontSize) hookFontSize.value = p.hook_font_size;
+    if (p.hook_text_color && hookTextColor) hookTextColor.value = p.hook_text_color;
+    if (p.hook_bg_color === 'transparent' && hookTransparentBg) {
+      hookTransparentBg.checked = true;
+    } else {
+      if (hookTransparentBg) hookTransparentBg.checked = false;
+      if (p.hook_bg_color && hookBgColor) hookBgColor.value = p.hook_bg_color;
+    }
+    if (p.hook_border_color && hookBorderColor) hookBorderColor.value = p.hook_border_color;
+    if (watermarkInput) watermarkInput.value = p.watermark_text || acc.handle || '';
+    if (typeof p.jump_cuts === 'boolean' && jumpCutsToggle) jumpCutsToggle.checked = p.jump_cuts;
+    if (typeof p.target_fps === 'number' && fps60Toggle) fps60Toggle.checked = p.target_fps >= 60;
+    if (typeof p.video_enhance === 'boolean' && videoEnhanceToggle) videoEnhanceToggle.checked = p.video_enhance;
+    if (typeof p.enable_ad_banner === 'boolean' && adBannerToggle) {
+      adBannerToggle.checked = p.enable_ad_banner;
+      adBannerBox.classList.toggle('hidden', !p.enable_ad_banner);
+    }
+    if (p.ad_mode && adModeSelect) {
+      adModeSelect.value = p.ad_mode;
+      adAudioRow.classList.toggle('hidden', p.ad_mode !== 'midroll_pause');
+    }
+    if (p.ad_banner_id && adBannerSelect) adBannerSelect.value = p.ad_banner_id;
+    if (p.ad_audio_id && adAudioSelect) adAudioSelect.value = p.ad_audio_id;
+    if (p.bg_music_id && bgMusicSelect) bgMusicSelect.value = p.bg_music_id;
+    updateLivePreview();
+  }
+
+  let editingAccountId = null;
+
+  function openAccountModal(acc = null) {
+    editingAccountId = acc ? acc.id : null;
+    accountModalTitle.textContent = acc ? `⚙️ Настройки аккаунта: ${acc.name}` : '➕ Новый TikTok аккаунт';
+    accNameInput.value = acc ? acc.name : '';
+    accHandleInput.value = acc ? (acc.handle || '') : '';
+    accHashtagsInput.value = acc ? (acc.default_hashtags || '') : '#нарезки #тикток #стрим #рекомендации #shorts';
+    accTemplateInput.value = acc ? (acc.caption_template || '{title} 🔥\n\n{hashtags}') : '{title} 🔥\n\n{hashtags}';
+    accColorInput.value = acc ? (acc.color || '#7c5cff') : '#7c5cff';
+    btnAccountDelete.classList.toggle('hidden', !acc);
+    btnAccountLogout.classList.toggle('hidden', !(acc && window.tikcutDesktop));
+    accountModal.classList.remove('hidden');
+  }
+
+  function closeAccountModal() {
+    accountModal.classList.add('hidden');
+    editingAccountId = null;
+  }
+
+  if (btnAddAccount) btnAddAccount.addEventListener('click', () => openAccountModal(null));
+  if (btnEditAccount) btnEditAccount.addEventListener('click', () => {
+    const acc = getActiveAccount();
+    if (acc) openAccountModal(acc);
+  });
+  if (btnCloseAccountModal) btnCloseAccountModal.addEventListener('click', closeAccountModal);
+  if (btnCancelAccount) btnCancelAccount.addEventListener('click', closeAccountModal);
+  if (accountBackdrop) accountBackdrop.addEventListener('click', closeAccountModal);
+
+  if (btnSavePreset) {
+    btnSavePreset.addEventListener('click', async () => {
+      const acc = getActiveAccount();
+      if (!acc) return;
+      const preset = getCurrentOptions(0);
+      delete preset.gemini_api_key;
+      const res = await fetch(`/api/accounts/${acc.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preset }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        Object.assign(acc, updated);
+        showToast(`Пресет для «${acc.name}» сохранён!`);
+      }
+    });
+  }
+
+  if (btnOpenTiktokLogin) {
+    btnOpenTiktokLogin.addEventListener('click', async () => {
+      const acc = getActiveAccount();
+      if (!acc) return;
+      if (window.tikcutDesktop && window.tikcutDesktop.tiktokOpenLogin) {
+        await window.tikcutDesktop.tiktokOpenLogin(acc.id, acc.name);
+      } else {
+        window.open('https://www.tiktok.com/tiktokstudio/upload', '_blank');
+      }
+    });
+  }
+
+  if (btnSaveAccount) {
+    btnSaveAccount.addEventListener('click', async () => {
+      const name = (accNameInput.value || '').trim();
+      if (!name) {
+        showToast('Введите название аккаунта');
+        return;
+      }
+      const preset = getCurrentOptions(0);
+      delete preset.gemini_api_key;
+      const body = {
+        name,
+        handle: (accHandleInput.value || '').trim(),
+        color: accColorInput.value || '#7c5cff',
+        default_hashtags: (accHashtagsInput.value || '').trim(),
+        caption_template: (accTemplateInput.value || '').trim(),
+        preset,
+      };
+      const url = editingAccountId ? `/api/accounts/${editingAccountId}` : '/api/accounts';
+      const method = editingAccountId ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        showToast('Не удалось сохранить аккаунт');
+        return;
+      }
+      const saved = await res.json();
+      state.activeAccountId = saved.id;
+      closeAccountModal();
+      await refreshAccounts();
+      showToast(`Аккаунт «${saved.name}» сохранён с текущим пресетом!`);
+    });
+  }
+
+  if (btnAccountDelete) {
+    btnAccountDelete.addEventListener('click', async () => {
+      if (!editingAccountId) return;
+      await fetch(`/api/accounts/${editingAccountId}`, { method: 'DELETE' });
+      if (state.activeAccountId === editingAccountId) state.activeAccountId = null;
+      closeAccountModal();
+      await refreshAccounts();
+      showToast('Аккаунт удалён');
+    });
+  }
+
+  if (btnAccountLogout) {
+    btnAccountLogout.addEventListener('click', async () => {
+      if (!editingAccountId || !window.tikcutDesktop) return;
+      await window.tikcutDesktop.tiktokLogout(editingAccountId);
+      showToast('Сессия TikTok очищена — можно войти в другой аккаунт');
+    });
+  }
+
+  function buildCaptionForAccount(clip) {
+    const acc = getActiveAccount();
+    if (!acc) return clip.tiktok_caption || `${clip.title || ''}\n\n#нарезки #тикток #shorts`;
+    const tpl = acc.caption_template || '{title} 🔥\n\n{hashtags}';
+    const tags = acc.default_hashtags || '#нарезки #тикток';
+    return tpl.replace(/\{title\}/g, clip.title || '').replace(/\{hashtags\}/g, tags).trim();
   }
 
   async function refreshAdsList() {
@@ -1183,6 +1465,7 @@
           <div class="clip-title">${escapeHtml(clip.title || clip.id)}</div>
           <div class="clip-tags">
             ${(clip.tags || []).map((t) => `<span class="clip-tag">${escapeHtml(t)}</span>`).join('')}
+            ${(clip.published_to || []).map((p) => `<span class="published-badge">✅ ${escapeHtml(p.account_name || 'TikTok')}</span>`).join('')}
           </div>
           <div class="clip-transcript">${escapeHtml(clip.transcript || 'Без речи')}</div>
           <div class="clip-shift-row">
@@ -1190,6 +1473,7 @@
             <button type="button" class="btn btn-ghost btn-sm btn-shift-clip" data-delta="10">⏩ +10с позже</button>
           </div>
           <div class="clip-actions">
+            <button type="button" class="btn btn-tiktok btn-sm btn-full btn-upload-tiktok">🚀 Загрузить в TikTok</button>
             <a class="btn btn-primary btn-sm" href="${dlUrl}" download>⬇ Скачать MP4</a>
             <button type="button" class="btn btn-secondary btn-sm btn-edit">✏️ Редактор</button>
             <button type="button" class="btn btn-ghost btn-sm btn-rerender">🎨 Новый стиль</button>
@@ -1197,6 +1481,42 @@
           </div>
         </div>
       `;
+
+      card.querySelector('.btn-upload-tiktok').addEventListener('click', async () => {
+        const acc = getActiveAccount();
+        const caption = buildCaptionForAccount(clip);
+        try {
+          await navigator.clipboard.writeText(caption);
+        } catch (_) {}
+
+        if (window.tikcutDesktop && window.tikcutDesktop.tiktokUploadClip) {
+          let filePath = '';
+          try {
+            const pRes = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/path`);
+            if (pRes.ok) filePath = (await pRes.json()).path || '';
+          } catch (_) {}
+          const accId = acc ? acc.id : 'default';
+          const accName = acc ? acc.name : 'TikTok';
+          await window.tikcutDesktop.tiktokUploadClip({
+            accountId: accId,
+            accountName: accName,
+            filePath,
+            caption,
+          });
+          showToast('TikTok Studio открыт! Описание с хэштегами скопировано — перетащите выделенный MP4.');
+          if (acc) {
+            await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/mark-published`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ account_id: acc.id, account_name: acc.name }),
+            }).catch(() => {});
+            await refreshAccounts();
+          }
+        } else {
+          window.open('https://www.tiktok.com/tiktokstudio/upload', '_blank');
+          showToast('Описание и хэштеги скопированы — откройте TikTok Studio для загрузки!');
+        }
+      });
 
       card.querySelectorAll('.btn-shift-clip').forEach((sBtn) => {
         sBtn.addEventListener('click', async () => {
@@ -1239,7 +1559,7 @@
       card.querySelector('.btn-edit').addEventListener('click', () => openClipEditor(job, clip, card));
 
       card.querySelector('.btn-copy-cap').addEventListener('click', async () => {
-        const txt = clip.tiktok_caption || `${clip.title}\n\n#нарезки #тикток #shorts`;
+        const txt = buildCaptionForAccount(clip);
         try {
           await navigator.clipboard.writeText(txt);
           showToast('Описание и хэштеги скопированы!');

@@ -11,6 +11,14 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from backend.accounts import (
+    create_account,
+    delete_account,
+    get_account,
+    increment_published,
+    list_accounts,
+    update_account,
+)
 from backend.config import (
     ADS_DIR,
     AVATARS_DIR,
@@ -33,6 +41,7 @@ from backend.pipeline import (
     get_job,
     list_jobs,
     load_existing_jobs,
+    mark_clip_published,
     rerender_single_clip,
     start_processing,
 )
@@ -176,6 +185,80 @@ def api_health() -> Dict[str, Any]:
 def index() -> HTMLResponse:
     html_path = STATIC_DIR / "index.html"
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+class AccountCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=40)
+    handle: str = Field(default="")
+    color: str = Field(default="#7c5cff")
+    default_hashtags: str = Field(default="#нарезки #тикток #стрим #рекомендации #shorts")
+    caption_template: str = Field(default="{title} 🔥\n\n{hashtags}")
+    preset: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AccountUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    handle: Optional[str] = None
+    color: Optional[str] = None
+    default_hashtags: Optional[str] = None
+    caption_template: Optional[str] = None
+    preset: Optional[Dict[str, Any]] = None
+
+
+class MarkPublishedRequest(BaseModel):
+    account_id: str
+    account_name: str = ""
+
+
+@app.get("/api/accounts")
+def api_list_accounts() -> Dict[str, Any]:
+    return {"accounts": list_accounts()}
+
+
+@app.post("/api/accounts")
+def api_create_account(req: AccountCreateRequest) -> Dict[str, Any]:
+    return create_account(
+        name=req.name,
+        handle=req.handle,
+        color=req.color,
+        default_hashtags=req.default_hashtags,
+        caption_template=req.caption_template,
+        preset=req.preset,
+    )
+
+
+@app.put("/api/accounts/{account_id}")
+def api_update_account(account_id: str, req: AccountUpdateRequest) -> Dict[str, Any]:
+    updated = update_account(account_id, req.model_dump(exclude_none=True))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Аккаунт не найден")
+    return updated
+
+
+@app.delete("/api/accounts/{account_id}")
+def api_delete_account(account_id: str) -> Dict[str, Any]:
+    if not delete_account(account_id):
+        raise HTTPException(status_code=404, detail="Аккаунт не найден")
+    return {"ok": True}
+
+
+@app.get("/api/jobs/{job_id}/clips/{clip_id}/path")
+def api_clip_local_path(job_id: str, clip_id: str) -> Dict[str, Any]:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", job_id) or not re.fullmatch(r"[a-zA-Z0-9_-]+", clip_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор")
+    mp4_path = JOBS_DIR / job_id / f"{clip_id}.mp4"
+    if not mp4_path.exists():
+        raise HTTPException(status_code=404, detail="Клип не найден")
+    return {"path": str(mp4_path.resolve())}
+
+
+@app.post("/api/jobs/{job_id}/clips/{clip_id}/mark-published")
+def api_mark_clip_published(job_id: str, clip_id: str, req: MarkPublishedRequest) -> Dict[str, Any]:
+    updated = mark_clip_published(job_id, clip_id, req.account_id, req.account_name)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Клип не найден")
+    increment_published(req.account_id)
+    return updated
 
 
 @app.get("/api/config")

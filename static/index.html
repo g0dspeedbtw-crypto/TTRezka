@@ -54,6 +54,26 @@
   </div>
 
   <main class="container">
+    <!-- Multi-Account TikTok Studio Bar -->
+    <section class="card accounts-bar">
+      <div class="accounts-bar-top">
+        <div class="accounts-bar-title">
+          <span class="acc-title-icon">🎵</span>
+          <div>
+            <div class="acc-bar-heading">Мульти-аккаунт TikTok Студия</div>
+            <div class="acc-bar-sub" id="activeAccountSub">Создайте аккаунт TikTok, чтобы сохранять отдельные пресеты, хэштеги и загружать клипы в 1 клик</div>
+          </div>
+        </div>
+        <div class="accounts-bar-actions">
+          <button id="btnSavePreset" type="button" class="btn btn-secondary btn-sm hidden">💾 Сохранить пресет</button>
+          <button id="btnOpenTiktokLogin" type="button" class="btn btn-secondary btn-sm hidden">🔐 Войти в TikTok</button>
+          <button id="btnEditAccount" type="button" class="btn btn-ghost btn-sm hidden" title="Настройки аккаунта">⚙️</button>
+          <button id="btnAddAccount" type="button" class="btn btn-primary btn-sm">➕ Добавить TikTok</button>
+        </div>
+      </div>
+      <div id="accountsPills" class="accounts-pills"></div>
+    </section>
+
     <!-- Hero / Upload + Studio Configurator -->
     <section class="studio-grid">
       <!-- Left: Upload / Link + Settings -->
@@ -508,6 +528,54 @@
         <button id="btnCloseHistory" class="btn btn-ghost btn-sm">✕</button>
       </div>
       <div id="historyList" class="history-list"></div>
+    </div>
+  </div>
+
+  <!-- TikTok Account Create/Edit Modal -->
+  <div id="accountModal" class="modal hidden">
+    <div class="modal-backdrop" id="accountBackdrop"></div>
+    <div class="modal-panel" style="width: min(540px, 94vw);">
+      <div class="modal-header">
+        <div>
+          <h3 id="accountModalTitle">➕ Новый TikTok аккаунт</h3>
+          <div class="modal-sub">У каждого аккаунта своя изолированная сессия TikTok, свой пресет стиля и свои хэштеги</div>
+        </div>
+        <button id="btnCloseAccountModal" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div class="editor-form">
+        <div class="form-grid">
+          <div class="field">
+            <label for="accNameInput">Название канала / проекта</label>
+            <input id="accNameInput" type="text" placeholder="Напр: Нарезки Братишкина" maxlength="40" />
+          </div>
+          <div class="field">
+            <label for="accHandleInput">Ник в TikTok (@handle)</label>
+            <input id="accHandleInput" type="text" placeholder="@my_clips" maxlength="36" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="accHashtagsInput">Хэштеги этого аккаунта по умолчанию</label>
+          <input id="accHashtagsInput" type="text" value="#нарезки #тикток #стрим #рекомендации #shorts" />
+        </div>
+        <div class="field">
+          <label for="accTemplateInput">Шаблон описания ({title} — заголовок клипа, {hashtags} — хэштеги)</label>
+          <textarea id="accTemplateInput" rows="3">{title} 🔥
+
+{hashtags}</textarea>
+        </div>
+        <div class="color-controls-row" style="margin-bottom: 8px;">
+          <label class="color-pill">
+            <span>Цвет метки</span>
+            <input id="accColorInput" type="color" value="#7c5cff" />
+          </label>
+          <button id="btnAccountLogout" type="button" class="btn btn-ghost btn-sm hidden">🚪 Выйти из сессии TikTok</button>
+          <button id="btnAccountDelete" type="button" class="btn btn-ghost btn-sm hidden" style="color:#ff8fa3;">🗑 Удалить аккаунт</button>
+        </div>
+        <div class="editor-footer">
+          <button id="btnCancelAccount" type="button" class="btn btn-ghost">Отмена</button>
+          <button id="btnSaveAccount" type="button" class="btn btn-primary">💾 Сохранить аккаунт и пресет</button>
+        </div>
+      </div>
     </div>
   </div>
 

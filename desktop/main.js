@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, dialog, ipcMain, session, clipboard } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const { spawn } = require('child_process');
 const http = require('http');
@@ -336,6 +336,100 @@ ipcMain.handle('updater:install', () => {
   stopBackend();
   // Silent one-click update + automatic relaunch (no Next -> Next -> Finish wizard!)
   autoUpdater.quitAndInstall(true, true);
+});
+
+// --- Multi-Account Isolated TikTok Studio Windows ---
+const tiktokWindows = new Map();
+
+function getTiktokPartition(accountId) {
+  const safe = String(accountId || 'default').replace(/[^a-zA-Z0-9_-]/g, '');
+  return `persist:tiktok_${safe}`;
+}
+
+async function isTiktokLoggedIn(accountId) {
+  try {
+    const ses = session.fromPartition(getTiktokPartition(accountId));
+    const cookies = await ses.cookies.get({ domain: 'tiktok.com' });
+    return cookies.some((c) => c.name === 'sessionid' || c.name === 'sid_tt' || c.name === 'sessionid_ss');
+  } catch (_) {
+    return false;
+  }
+}
+
+function openTiktokWindow(accountId, accountName, targetUrl) {
+  const existing = tiktokWindows.get(accountId);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    if (targetUrl) existing.loadURL(targetUrl).catch(() => {});
+    return existing;
+  }
+
+  const partition = getTiktokPartition(accountId);
+  const win = new BrowserWindow({
+    width: 1180,
+    height: 820,
+    minWidth: 900,
+    minHeight: 640,
+    backgroundColor: '#0e1018',
+    title: `TikTok Studio — ${accountName || accountId}`,
+    webPreferences: {
+      partition,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  // Clean desktop Chrome UA so TikTok Studio loads smoothly
+  const chromeUA =
+    process.platform === 'darwin'
+      ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+  win.webContents.setUserAgent(chromeUA);
+
+  win.loadURL(targetUrl || 'https://www.tiktok.com/tiktokstudio/upload').catch(() => {});
+
+  win.on('closed', () => {
+    tiktokWindows.delete(accountId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('tiktok:session-changed', accountId);
+    }
+  });
+
+  tiktokWindows.set(accountId, win);
+  return win;
+}
+
+ipcMain.handle('tiktok:check-session', async (_e, accountId) => {
+  return await isTiktokLoggedIn(accountId);
+});
+
+ipcMain.handle('tiktok:open-login', async (_e, { accountId, accountName }) => {
+  const logged = await isTiktokLoggedIn(accountId);
+  const url = logged ? 'https://www.tiktok.com/tiktokstudio/upload' : 'https://www.tiktok.com/login';
+  openTiktokWindow(accountId, accountName, url);
+  return { ok: true };
+});
+
+ipcMain.handle('tiktok:upload-clip', async (_e, { accountId, accountName, filePath, caption }) => {
+  if (caption) {
+    clipboard.writeText(String(caption));
+  }
+  openTiktokWindow(accountId, accountName, 'https://www.tiktok.com/tiktokstudio/upload');
+  if (filePath && fs.existsSync(filePath)) {
+    shell.showItemInFolder(filePath);
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('tiktok:logout', async (_e, accountId) => {
+  const existing = tiktokWindows.get(accountId);
+  if (existing && !existing.isDestroyed()) existing.close();
+  const ses = session.fromPartition(getTiktokPartition(accountId));
+  await ses.clearStorageData();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('tiktok:session-changed', accountId);
+  }
+  return { ok: true };
 });
 
 async function createWindow() {

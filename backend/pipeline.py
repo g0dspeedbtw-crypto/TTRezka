@@ -995,3 +995,24 @@ def create_custom_clip(
         _save_job(live_job)
 
     return new_clip
+
+
+def mark_clip_published(job_id: str, clip_id: str, account_id: str, account_name: str = "") -> Optional[Dict[str, Any]]:
+    """Mark a clip as published to a specific TikTok account."""
+    updated = None
+    with _LOCK:
+        live_job = _JOBS.get(job_id)
+        if not live_job:
+            return None
+        for c in live_job.get("clips", []):
+            if c.get("id") == clip_id:
+                pubs = list(c.get("published_to") or [])
+                entry = {"account_id": account_id, "account_name": account_name or account_id, "at": int(time.time())}
+                if not any(p.get("account_id") == account_id for p in pubs):
+                    pubs.append(entry)
+                c["published_to"] = pubs
+                updated = dict(c)
+                break
+        if updated is not None:
+            _save_job(live_job)
+    return updated
