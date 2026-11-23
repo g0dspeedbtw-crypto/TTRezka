@@ -19,6 +19,9 @@
       </div>
     </div>
     <div class="topbar-actions">
+      <button id="btnDashboard" class="btn btn-ghost" title="Статистика студии и экспорт">
+        <span>📊 Дашборд</span>
+      </button>
       <button id="btnChangelog" class="btn btn-ghost" title="История обновлений">
         <span>📋 Что нового</span>
       </button>
@@ -300,6 +303,31 @@
               <span class="switch-label">📢 Рекламный баннер</span>
               <span class="switch"><input id="adBannerToggle" type="checkbox" /><span class="slider"></span></span>
             </label>
+            <label class="switch-item">
+              <span class="switch-label">🎮 Залипательное видео снизу</span>
+              <span class="switch"><input id="satisfyingToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">🖼 Авто-обложка (1-й кадр)</span>
+              <span class="switch"><input id="autoCoverToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+            <label class="switch-item">
+              <span class="switch-label">🔄 Уникализатор (Anti-Duplicate)</span>
+              <span class="switch"><input id="uniquifyToggle" type="checkbox" /><span class="slider"></span></span>
+            </label>
+          </div>
+
+          <div id="satisfyingBox" class="sub-box hidden" style="margin-bottom: 12px;">
+            <div class="field">
+              <label for="satisfyingSelect">🎮 Нижнее залипательное видео (GTA / Subway Surfers / Minecraft MP4)</label>
+              <div class="music-row">
+                <select id="satisfyingSelect">
+                  <option value="">Видео не выбрано</option>
+                </select>
+                <input id="satisfyingFileInput" type="file" accept="video/*,.mp4,.mov,.mkv,.webm" hidden />
+                <button id="btnUploadSatisfying" type="button" class="btn btn-secondary btn-sm">+ Залипашка</button>
+              </div>
+            </div>
           </div>
 
           <div id="adBannerBox" class="sub-box hidden" style="margin-bottom: 12px;">
@@ -499,6 +527,12 @@
           <p id="resultsMeta" class="results-meta">Отобраны самые динамичные и эмоциональные моменты</p>
         </div>
         <div class="results-header-actions">
+          <button id="btnCompileSelected" type="button" class="btn btn-secondary hidden">
+            🎞 Склеить выбранные (<span id="selectedClipsCount">0</span>)
+          </button>
+          <button id="btnExportFolder" type="button" class="btn btn-secondary hidden">
+            📂 В папку аккаунта
+          </button>
           <button id="btnShuffleMoments" type="button" class="btn btn-secondary hidden">
             🎲 Перемешать (другие моменты)
           </button>
@@ -528,6 +562,23 @@
         <button id="btnCloseHistory" class="btn btn-ghost btn-sm">✕</button>
       </div>
       <div id="historyList" class="history-list"></div>
+    </div>
+  </div>
+
+  <!-- Studio Dashboard Modal -->
+  <div id="dashboardModal" class="modal hidden">
+    <div class="modal-backdrop" id="dashboardBackdrop"></div>
+    <div class="modal-panel" style="width: min(680px, 94vw);">
+      <div class="modal-header">
+        <div>
+          <h3>📊 Дашборд TikCut Studio</h3>
+          <div class="modal-sub">Статистика по проектам, аккаунтам и публикациям в TikTok / Shorts / Reels</div>
+        </div>
+        <button id="btnCloseDashboard" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div id="dashboardBody" class="dashboard-body">
+        <div class="history-meta">Загрузка статистики...</div>
+      </div>
     </div>
   </div>
 

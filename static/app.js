@@ -103,6 +103,21 @@
   const previewAdBanner = document.getElementById('previewAdBanner');
   const previewAdImg = document.getElementById('previewAdImg');
   const previewAdBadge = document.getElementById('previewAdBadge');
+  const satisfyingToggle = document.getElementById('satisfyingToggle');
+  const satisfyingBox = document.getElementById('satisfyingBox');
+  const satisfyingSelect = document.getElementById('satisfyingSelect');
+  const satisfyingFileInput = document.getElementById('satisfyingFileInput');
+  const btnUploadSatisfying = document.getElementById('btnUploadSatisfying');
+  const autoCoverToggle = document.getElementById('autoCoverToggle');
+  const uniquifyToggle = document.getElementById('uniquifyToggle');
+  const btnCompileSelected = document.getElementById('btnCompileSelected');
+  const selectedClipsCount = document.getElementById('selectedClipsCount');
+  const btnExportFolder = document.getElementById('btnExportFolder');
+  const btnDashboard = document.getElementById('btnDashboard');
+  const dashboardModal = document.getElementById('dashboardModal');
+  const dashboardBackdrop = document.getElementById('dashboardBackdrop');
+  const btnCloseDashboard = document.getElementById('btnCloseDashboard');
+  const dashboardBody = document.getElementById('dashboardBody');
   const ollamaRow = document.getElementById('ollamaRow');
   const ollamaSelect = document.getElementById('ollamaSelect');
   const geminiKeyInput = document.getElementById('geminiKeyInput');
@@ -294,6 +309,7 @@
     await refreshMusicList();
     await refreshAvatarList();
     await refreshAdsList();
+    await refreshSatisfyingList();
     await refreshAccounts();
     await refreshHistory();
 
@@ -303,6 +319,107 @@
       });
     }
   }
+
+  async function refreshSatisfyingList() {
+    try {
+      const res = await fetch('/api/satisfying');
+      const data = await res.json();
+      const prev = satisfyingSelect.value;
+      satisfyingSelect.innerHTML = '<option value="">Видео не выбрано</option>';
+      (data.videos || []).forEach((v) => {
+        const opt = document.createElement('option');
+        opt.value = v.id;
+        opt.textContent = `🎮 ${v.name}`;
+        satisfyingSelect.appendChild(opt);
+      });
+      if (prev) satisfyingSelect.value = prev;
+      else if (data.videos && data.videos.length > 0) satisfyingSelect.value = data.videos[0].id;
+    } catch (_) {}
+  }
+
+  if (satisfyingToggle) {
+    satisfyingToggle.addEventListener('change', () => {
+      satisfyingBox.classList.toggle('hidden', !satisfyingToggle.checked);
+    });
+  }
+  if (btnUploadSatisfying && satisfyingFileInput) {
+    btnUploadSatisfying.addEventListener('click', () => satisfyingFileInput.click());
+    satisfyingFileInput.addEventListener('change', async () => {
+      const file = satisfyingFileInput.files && satisfyingFileInput.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      btnUploadSatisfying.disabled = true;
+      btnUploadSatisfying.textContent = '⏳...';
+      try {
+        const res = await fetch('/api/satisfying', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки видео');
+        await refreshSatisfyingList();
+        satisfyingSelect.value = data.id;
+        showToast(`Залипательное видео «${data.name}» добавлено!`);
+      } catch (err) {
+        showToast(err.message || 'Ошибка загрузки');
+      } finally {
+        btnUploadSatisfying.disabled = false;
+        btnUploadSatisfying.textContent = '+ Залипашка';
+        satisfyingFileInput.value = '';
+      }
+    });
+  }
+
+  async function openDashboard() {
+    dashboardModal.classList.remove('hidden');
+    dashboardBody.innerHTML = '<div class="history-meta">Загрузка статистики...</div>';
+    try {
+      const res = await fetch('/api/dashboard');
+      const d = await res.json();
+      const accRows = (d.accounts || [])
+        .map(
+          (a) => `
+          <div class="history-item" style="cursor:default;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div class="history-name"><span style="color:${a.color || '#7c5cff'}">●</span> ${escapeHtml(a.name)} <span style="color:var(--muted)">${escapeHtml(a.handle || '')}</span></div>
+              <div class="history-meta">Хэштеги: ${escapeHtml(a.default_hashtags || '—')}</div>
+            </div>
+            <div class="pill-count">🚀 ${a.published_count || 0} выложено</div>
+          </div>
+        `
+        )
+        .join('');
+
+      dashboardBody.innerHTML = `
+        <div class="dash-stats-grid">
+          <div class="dash-stat-card"><div class="dash-stat-val">${d.total_projects || 0}</div><div class="dash-stat-lbl">Проектов</div></div>
+          <div class="dash-stat-card"><div class="dash-stat-val">${d.total_clips || 0}</div><div class="dash-stat-lbl">Клипов создано</div></div>
+          <div class="dash-stat-card"><div class="dash-stat-val">${d.published_tiktok || 0}</div><div class="dash-stat-lbl">🎵 TikTok</div></div>
+          <div class="dash-stat-card"><div class="dash-stat-val">${d.published_youtube || 0}</div><div class="dash-stat-lbl">▶ Shorts</div></div>
+          <div class="dash-stat-card"><div class="dash-stat-val">${d.published_instagram || 0}</div><div class="dash-stat-lbl">📸 Reels</div></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <strong style="font-size:13.5px;">Аккаунты студии (${d.accounts_count || 0})</strong>
+          <button id="btnOpenExportsRoot" type="button" class="btn btn-secondary btn-sm">📂 Открыть папку выгрузок</button>
+        </div>
+        <div class="history-list">${accRows || '<div class="history-meta">Аккаунты ещё не созданы</div>'}</div>
+      `;
+      const btnOpenExp = document.getElementById('btnOpenExportsRoot');
+      if (btnOpenExp) {
+        btnOpenExp.addEventListener('click', () => {
+          if (window.tikcutDesktop && window.tikcutDesktop.openFolder) {
+            window.tikcutDesktop.openFolder(d.exports_dir);
+          } else {
+            showToast(`Папка выгрузок: ${d.exports_dir}`);
+          }
+        });
+      }
+    } catch (_) {
+      dashboardBody.innerHTML = '<div class="history-meta">Не удалось загрузить статистику.</div>';
+    }
+  }
+
+  if (btnDashboard) btnDashboard.addEventListener('click', openDashboard);
+  if (btnCloseDashboard) btnCloseDashboard.addEventListener('click', () => dashboardModal.classList.add('hidden'));
+  if (dashboardBackdrop) dashboardBackdrop.addEventListener('click', () => dashboardModal.classList.add('hidden'));
 
   function getActiveAccount() {
     return state.accounts.find((a) => a.id === state.activeAccountId) || null;
@@ -429,6 +546,13 @@
     if (p.ad_banner_id && adBannerSelect) adBannerSelect.value = p.ad_banner_id;
     if (p.ad_audio_id && adAudioSelect) adAudioSelect.value = p.ad_audio_id;
     if (p.bg_music_id && bgMusicSelect) bgMusicSelect.value = p.bg_music_id;
+    if (typeof p.enable_satisfying_video === 'boolean' && satisfyingToggle) {
+      satisfyingToggle.checked = p.enable_satisfying_video;
+      if (satisfyingBox) satisfyingBox.classList.toggle('hidden', !p.enable_satisfying_video);
+    }
+    if (p.satisfying_video_id && satisfyingSelect) satisfyingSelect.value = p.satisfying_video_id;
+    if (typeof p.auto_cover === 'boolean' && autoCoverToggle) autoCoverToggle.checked = p.auto_cover;
+    if (typeof p.uniquify_video === 'boolean' && uniquifyToggle) uniquifyToggle.checked = p.uniquify_video;
     updateLivePreview();
   }
 
@@ -1195,6 +1319,10 @@
       ad_mode: adModeSelect ? adModeSelect.value : 'bottom_overlay',
       ad_banner_id: adBannerSelect ? adBannerSelect.value || null : null,
       ad_audio_id: adAudioSelect ? adAudioSelect.value || null : null,
+      enable_satisfying_video: !!(satisfyingToggle && satisfyingToggle.checked),
+      satisfying_video_id: satisfyingSelect ? satisfyingSelect.value || null : null,
+      uniquify_video: !!(uniquifyToggle && uniquifyToggle.checked),
+      auto_cover: !!(autoCoverToggle && autoCoverToggle.checked),
       search_chat_activity: searchChatToggle ? searchChatToggle.checked : true,
       search_laughter: searchLaughterToggle ? searchLaughterToggle.checked : true,
       use_ai_director: useAiDirectorToggle ? useAiDirectorToggle.checked : true,
@@ -1430,18 +1558,83 @@
     }
   });
 
+  let selectedClipIdsForCompile = new Set();
+
+  function updateCompileBtnUI() {
+    if (!btnCompileSelected || !selectedClipsCount) return;
+    selectedClipsCount.textContent = String(selectedClipIdsForCompile.size);
+    btnCompileSelected.classList.toggle('hidden', selectedClipIdsForCompile.size < 2);
+  }
+
+  if (btnCompileSelected) {
+    btnCompileSelected.addEventListener('click', async () => {
+      if (!state.currentJobId || selectedClipIdsForCompile.size < 2) return;
+      btnCompileSelected.disabled = true;
+      btnCompileSelected.textContent = '⏳ Склейка...';
+      try {
+        const res = await fetch(`/api/jobs/${state.currentJobId}/compile`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clip_ids: Array.from(selectedClipIdsForCompile) }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || 'Ошибка склейки');
+        selectedClipIdsForCompile.clear();
+        const jobRes = await fetch(`/api/jobs/${state.currentJobId}`);
+        if (jobRes.ok) renderClips(await jobRes.json());
+        showToast('Подборка склеена и добавлена первой в список!');
+      } catch (err) {
+        showToast(err.message || 'Ошибка склейки');
+      } finally {
+        btnCompileSelected.disabled = false;
+        btnCompileSelected.innerHTML = '🎞 Склеить выбранные (<span id="selectedClipsCount">0</span>)';
+        updateCompileBtnUI();
+      }
+    });
+  }
+
+  if (btnExportFolder) {
+    btnExportFolder.addEventListener('click', async () => {
+      if (!state.currentJobId) return;
+      const acc = getActiveAccount();
+      const accName = acc ? acc.name : 'General';
+      btnExportFolder.disabled = true;
+      try {
+        const res = await fetch(`/api/jobs/${state.currentJobId}/export-folder`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_name: accName }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || 'Ошибка экспорта');
+        showToast(`Экспортировано ${data.count} клипов в папку «${accName}»!`);
+        if (window.tikcutDesktop && window.tikcutDesktop.openFolder && data.folder) {
+          window.tikcutDesktop.openFolder(data.folder);
+        }
+      } catch (err) {
+        showToast(err.message || 'Ошибка экспорта');
+      } finally {
+        btnExportFolder.disabled = false;
+      }
+    });
+  }
+
   function renderClips(job) {
     resultsSection.classList.remove('hidden');
     if (customClipBar) customClipBar.classList.remove('hidden');
     const notice = job.ai_notice ? ` • ⚠️ ${job.ai_notice}` : '';
     resultsMeta.textContent = `Проект: ${job.original_filename} • Клипов: ${job.clips.length} • Распознано слов: ${job.words_count || 0}${notice}`;
+    selectedClipIdsForCompile.clear();
+    updateCompileBtnUI();
     if (job.clips.length > 0) {
       btnDownloadAllZip.href = `/api/jobs/${job.job_id}/download-all`;
       btnDownloadAllZip.classList.remove('hidden');
       if (btnShuffleMoments) btnShuffleMoments.classList.remove('hidden');
+      if (btnExportFolder) btnExportFolder.classList.remove('hidden');
     } else {
       btnDownloadAllZip.classList.add('hidden');
       if (btnShuffleMoments) btnShuffleMoments.classList.add('hidden');
+      if (btnExportFolder) btnExportFolder.classList.add('hidden');
     }
     clipsGrid.innerHTML = '';
 
@@ -1460,20 +1653,28 @@
           </video>
           <div class="score-badge">🔥 ${clip.viral_score}/100</div>
           <div class="dur-badge">${formatDuration(clip.start)} – ${formatDuration(clip.end)} (${Math.round(clip.duration)}с)</div>
+          <label class="clip-select-check" title="Выбрать для склейки в подборку">
+            <input type="checkbox" class="clip-compile-cb" />
+            <span>Склеить</span>
+          </label>
         </div>
         <div class="clip-body">
           <div class="clip-title">${escapeHtml(clip.title || clip.id)}</div>
           <div class="clip-tags">
             ${(clip.tags || []).map((t) => `<span class="clip-tag">${escapeHtml(t)}</span>`).join('')}
-            ${(clip.published_to || []).map((p) => `<span class="published-badge">✅ ${escapeHtml(p.account_name || 'TikTok')}</span>`).join('')}
+            ${(clip.published_to || []).map((p) => `<span class="published-badge">✅ ${escapeHtml(p.platform || 'tiktok')}: ${escapeHtml(p.account_name || '')}</span>`).join('')}
           </div>
           <div class="clip-transcript">${escapeHtml(clip.transcript || 'Без речи')}</div>
           <div class="clip-shift-row">
             <button type="button" class="btn btn-ghost btn-sm btn-shift-clip" data-delta="-10">⏪ -10с раньше</button>
             <button type="button" class="btn btn-ghost btn-sm btn-shift-clip" data-delta="10">⏩ +10с позже</button>
           </div>
+          <div class="social-post-row">
+            <button type="button" class="btn btn-tiktok btn-sm btn-social-upload" data-platform="tiktok">🎵 TikTok</button>
+            <button type="button" class="btn btn-shorts btn-sm btn-social-upload" data-platform="youtube">▶ Shorts</button>
+            <button type="button" class="btn btn-reels btn-sm btn-social-upload" data-platform="instagram">📸 Reels</button>
+          </div>
           <div class="clip-actions">
-            <button type="button" class="btn btn-tiktok btn-sm btn-full btn-upload-tiktok">🚀 Загрузить в TikTok</button>
             <a class="btn btn-primary btn-sm" href="${dlUrl}" download>⬇ Скачать MP4</a>
             <button type="button" class="btn btn-secondary btn-sm btn-edit">✏️ Редактор</button>
             <button type="button" class="btn btn-ghost btn-sm btn-rerender">🎨 Новый стиль</button>
@@ -1482,40 +1683,54 @@
         </div>
       `;
 
-      card.querySelector('.btn-upload-tiktok').addEventListener('click', async () => {
-        const acc = getActiveAccount();
-        const caption = buildCaptionForAccount(clip);
-        try {
-          await navigator.clipboard.writeText(caption);
-        } catch (_) {}
+      const compileCb = card.querySelector('.clip-compile-cb');
+      if (compileCb) {
+        compileCb.addEventListener('change', () => {
+          if (compileCb.checked) selectedClipIdsForCompile.add(clip.id);
+          else selectedClipIdsForCompile.delete(clip.id);
+          updateCompileBtnUI();
+        });
+      }
 
-        if (window.tikcutDesktop && window.tikcutDesktop.tiktokUploadClip) {
-          let filePath = '';
+      card.querySelectorAll('.btn-social-upload').forEach((sBtn) => {
+        sBtn.addEventListener('click', async () => {
+          const platform = sBtn.dataset.platform || 'tiktok';
+          const acc = getActiveAccount();
+          const caption = buildCaptionForAccount(clip);
           try {
-            const pRes = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/path`);
-            if (pRes.ok) filePath = (await pRes.json()).path || '';
+            await navigator.clipboard.writeText(caption);
           } catch (_) {}
-          const accId = acc ? acc.id : 'default';
-          const accName = acc ? acc.name : 'TikTok';
-          await window.tikcutDesktop.tiktokUploadClip({
-            accountId: accId,
-            accountName: accName,
-            filePath,
-            caption,
-          });
-          showToast('TikTok Studio открыт! Описание с хэштегами скопировано — перетащите выделенный MP4.');
-          if (acc) {
-            await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/mark-published`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ account_id: acc.id, account_name: acc.name }),
-            }).catch(() => {});
-            await refreshAccounts();
+
+          const fallbackUrls = {
+            tiktok: 'https://www.tiktok.com/tiktokstudio/upload',
+            youtube: 'https://studio.youtube.com',
+            instagram: 'https://www.instagram.com',
+          };
+
+          if (window.tikcutDesktop && (window.tikcutDesktop.socialUploadClip || window.tikcutDesktop.tiktokUploadClip)) {
+            let filePath = '';
+            try {
+              const pRes = await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/path`);
+              if (pRes.ok) filePath = (await pRes.json()).path || '';
+            } catch (_) {}
+            const accId = acc ? acc.id : 'default';
+            const accName = acc ? acc.name : 'Studio';
+            const fn = window.tikcutDesktop.socialUploadClip || window.tikcutDesktop.tiktokUploadClip;
+            await fn({ accountId: accId, accountName: accName, platform, filePath, caption });
+            showToast(`Открыто окно ${platform.toUpperCase()}! Описание с хэштегами скопировано.`);
+            if (acc) {
+              await fetch(`/api/jobs/${job.job_id}/clips/${clip.id}/mark-published`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ account_id: acc.id, account_name: acc.name, platform }),
+              }).catch(() => {});
+              await refreshAccounts();
+            }
+          } else {
+            window.open(fallbackUrls[platform], '_blank');
+            showToast('Описание и хэштеги скопированы!');
           }
-        } else {
-          window.open('https://www.tiktok.com/tiktokstudio/upload', '_blank');
-          showToast('Описание и хэштеги скопированы — откройте TikTok Studio для загрузки!');
-        }
+        });
       });
 
       card.querySelectorAll('.btn-shift-clip').forEach((sBtn) => {

@@ -1,5 +1,8 @@
 """Background job pipeline orchestrator for local files and remote YouTube/Twitch VOD links."""
+import datetime
 import json
+import re
+import shutil
 import threading
 import time
 import traceback
@@ -7,8 +10,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from backend.accounts import list_accounts
 from backend.ai_director import find_funny_moments_gemini, find_funny_moments_ollama
-from backend.config import ADS_DIR, AVATARS_DIR, JOBS_DIR, MUSIC_DIR, load_settings
+from backend.config import ADS_DIR, AVATARS_DIR, EXPORTS_DIR, JOBS_DIR, MUSIC_DIR, SATISFYING_DIR, load_settings
 from backend.hardware import get_hardware_info
 from backend.highlights import (
     _find_audio_peak_times,
@@ -23,7 +27,7 @@ from backend.remote import (
     fetch_remote_transcript,
     find_remote_highlights,
 )
-from backend.renderer import probe_video, render_clip
+from backend.renderer import merge_clips_compilation, probe_video, render_clip
 from backend.transcriber import extract_audio_wav, transcribe_russian
 from backend.twitch_chat import generate_tiktok_caption
 
@@ -66,6 +70,13 @@ def _resolve_ad_path(ad_file_id: Optional[str]) -> Optional[Path]:
     if not ad_file_id:
         return None
     p = ADS_DIR / Path(ad_file_id).name
+    return p if p.exists() else None
+
+
+def _resolve_satisfying_path(sat_id: Optional[str]) -> Optional[Path]:
+    if not sat_id:
+        return None
+    p = SATISFYING_DIR / Path(sat_id).name
     return p if p.exists() else None
 
 
@@ -220,6 +231,10 @@ def _extract_render_kwargs(options: Dict[str, Any], hook_title: str) -> Dict[str
         "ad_mode": options.get("ad_mode", "bottom_overlay") if options.get("enable_ad_banner") else None,
         "ad_banner_path": _resolve_ad_path(options.get("ad_banner_id")) if options.get("enable_ad_banner") else None,
         "ad_audio_path": _resolve_ad_path(options.get("ad_audio_id")) if options.get("enable_ad_banner") else None,
+        "satisfying_video_path": _resolve_satisfying_path(options.get("satisfying_video_id")) if options.get("enable_satisfying_video") else None,
+        "uniquify_video": bool(options.get("uniquify_video", False)),
+        "auto_cover": bool(options.get("auto_cover", False)),
+        "cover_title": hook_title,
     }
 
 
@@ -997,8 +1012,14 @@ def create_custom_clip(
     return new_clip
 
 
-def mark_clip_published(job_id: str, clip_id: str, account_id: str, account_name: str = "") -> Optional[Dict[str, Any]]:
-    """Mark a clip as published to a specific TikTok account."""
+def mark_clip_published(
+    job_id: str,
+    clip_id: str,
+    account_id: str,
+    account_name: str = "",
+    platform: str = "tiktok",
+) -> Optional[Dict[str, Any]]:
+    """Mark a clip as published to a specific account & social platform (tiktok/youtube/instagram)."""
     updated = None
     with _LOCK:
         live_job = _JOBS.get(job_id)
@@ -1007,8 +1028,13 @@ def mark_clip_published(job_id: str, clip_id: str, account_id: str, account_name
         for c in live_job.get("clips", []):
             if c.get("id") == clip_id:
                 pubs = list(c.get("published_to") or [])
-                entry = {"account_id": account_id, "account_name": account_name or account_id, "at": int(time.time())}
-                if not any(p.get("account_id") == account_id for p in pubs):
+                entry = {
+                    "account_id": account_id,
+                    "account_name": account_name or account_id,
+                    "platform": platform,
+                    "at": int(time.time()),
+                }
+                if not any(p.get("account_id") == account_id and p.get("platform", "tiktok") == platform for p in pubs):
                     pubs.append(entry)
                 c["published_to"] = pubs
                 updated = dict(c)
@@ -1016,3 +1042,105 @@ def mark_clip_published(job_id: str, clip_id: str, account_id: str, account_name
         if updated is not None:
             _save_job(live_job)
     return updated
+
+
+def create_compilation_clip(job_id: str, clip_ids: List[str], title: str = "") -> Dict[str, Any]:
+    """Feature #3: Merge 2..6 rendered clips into a single Top Moments compilation clip."""
+    job = get_job(job_id)
+    if not job:
+        raise ValueError("Проект не найден")
+    jdir = _job_dir(job_id)
+    clips_by_id = {c["id"]: c for c in job.get("clips", [])}
+    selected = [clips_by_id[cid] for cid in clip_ids if cid in clips_by_id]
+    if len(selected) < 2:
+        raise ValueError("Выберите минимум 2 клипа для склейки")
+
+    paths = [jdir / f"{c['id']}.mp4" for c in selected]
+    comp_id = f"clip_comp_{int(time.time())}"
+    out_mp4 = jdir / f"{comp_id}.mp4"
+    out_thumb = jdir / f"{comp_id}.jpg"
+    merge_clips_compilation(paths, out_mp4, out_thumb)
+
+    meta = probe_video(out_mp4)
+    comp_title = title.strip() or f"ТОП-{len(selected)} моментов: {selected[0].get('title', '')[:40]}"
+    comp_transcript = " • ".join(c.get("title", "") for c in selected)
+    comp_clip = {
+        "id": comp_id,
+        "index": 0,
+        "start": 0.0,
+        "end": round(float(meta.get("duration") or 0), 2),
+        "duration": round(float(meta.get("duration") or 0), 2),
+        "title": comp_title,
+        "hook_text": comp_title,
+        "transcript": comp_transcript,
+        "viral_score": 98,
+        "tags": [f"🎞 Склейка ({len(selected)} клипа)", "🔥 Подборка"],
+        "tiktok_caption": generate_tiktok_caption(comp_title, comp_transcript, ["🔥 Подборка"], job.get("original_filename", "")),
+        "version": int(time.time()),
+        "file_size_mb": round(out_mp4.stat().st_size / (1024 * 1024), 2),
+    }
+
+    with _LOCK:
+        live_job = _JOBS[job_id]
+        live_job.setdefault("clips", []).insert(0, comp_clip)
+        _save_job(live_job)
+    return comp_clip
+
+
+def export_job_to_account_folder(job_id: str, account_name: str = "General") -> Dict[str, Any]:
+    """Feature #17: Export all clips + captions.txt cleanly into EXPORTS_DIR/<Account>/<YYYY-MM-DD>/."""
+    job = get_job(job_id)
+    if not job or not job.get("clips"):
+        raise ValueError("Нет готовых клипов для экспорта")
+
+    safe_acc = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ _-]+", "", account_name or "General").strip() or "General"
+    date_str = datetime.date.today().isoformat()
+    dest_dir = EXPORTS_DIR / safe_acc / f"{date_str}_{job_id}"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    jdir = _job_dir(job_id)
+    copied = 0
+    cap_lines: List[str] = []
+    for idx, c in enumerate(job["clips"], start=1):
+        mp4 = jdir / f"{c['id']}.mp4"
+        if mp4.exists():
+            shutil.copy2(mp4, dest_dir / f"{idx:02d}_score{c.get('viral_score', 0)}_{c['id']}.mp4")
+            copied += 1
+        cap_lines.append(f"=== #{idx}: {c.get('title', '')} ===")
+        cap_lines.append(c.get("tiktok_caption", ""))
+        cap_lines.append("")
+
+    (dest_dir / "captions_and_hashtags.txt").write_text("\n".join(cap_lines), encoding="utf-8")
+    return {"folder": str(dest_dir.resolve()), "count": copied}
+
+
+def get_studio_dashboard_stats() -> Dict[str, Any]:
+    """Feature #17: Studio-wide analytics across all jobs, clips, accounts and social platforms."""
+    all_jobs = list_jobs(limit=200)
+    accounts = list_accounts()
+    total_clips = 0
+    pub_tiktok = 0
+    pub_youtube = 0
+    pub_instagram = 0
+    for j in all_jobs:
+        for c in j.get("clips") or []:
+            total_clips += 1
+            for p in c.get("published_to") or []:
+                plat = p.get("platform", "tiktok")
+                if plat == "youtube":
+                    pub_youtube += 1
+                elif plat == "instagram":
+                    pub_instagram += 1
+                else:
+                    pub_tiktok += 1
+
+    return {
+        "total_projects": len(all_jobs),
+        "total_clips": total_clips,
+        "published_tiktok": pub_tiktok,
+        "published_youtube": pub_youtube,
+        "published_instagram": pub_instagram,
+        "accounts_count": len(accounts),
+        "accounts": accounts,
+        "exports_dir": str(EXPORTS_DIR.resolve()),
+    }

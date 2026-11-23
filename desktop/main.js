@@ -330,6 +330,12 @@ function stopBackend() {
 
 ipcMain.handle('app:version', () => app.getVersion());
 ipcMain.handle('app:open-external', (_e, url) => shell.openExternal(url || latestFallbackUrl));
+ipcMain.handle('app:open-folder', (_e, folderPath) => {
+  if (folderPath && fs.existsSync(folderPath)) {
+    return shell.openPath(folderPath);
+  }
+  return '';
+});
 ipcMain.handle('updater:check', () => triggerUpdateCheck(false));
 ipcMain.handle('updater:download', () => autoUpdater.downloadUpdate());
 ipcMain.handle('updater:install', () => {
@@ -415,6 +421,30 @@ ipcMain.handle('tiktok:upload-clip', async (_e, { accountId, accountName, filePa
     clipboard.writeText(String(caption));
   }
   openTiktokWindow(accountId, accountName, 'https://www.tiktok.com/tiktokstudio/upload');
+  if (filePath && fs.existsSync(filePath)) {
+    shell.showItemInFolder(filePath);
+  }
+  return { ok: true };
+});
+
+// Feature #12: Cross-posting to TikTok, YouTube Shorts & Instagram Reels in isolated per-account sessions
+ipcMain.handle('social:upload-clip', async (_e, { accountId, accountName, platform, filePath, caption }) => {
+  if (caption) {
+    clipboard.writeText(String(caption));
+  }
+  const urlMap = {
+    tiktok: 'https://www.tiktok.com/tiktokstudio/upload',
+    youtube: 'https://studio.youtube.com',
+    instagram: 'https://www.instagram.com',
+  };
+  const labelMap = {
+    tiktok: 'TikTok Studio',
+    youtube: 'YouTube Shorts Studio',
+    instagram: 'Instagram Reels',
+  };
+  const plat = urlMap[platform] ? platform : 'tiktok';
+  const winKey = `${accountId}_${plat}`;
+  openTiktokWindow(winKey, `${labelMap[plat]} — ${accountName || accountId}`, urlMap[plat]);
   if (filePath && fs.existsSync(filePath)) {
     shell.showItemInFolder(filePath);
   }

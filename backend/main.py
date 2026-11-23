@@ -23,9 +23,11 @@ from backend.config import (
     ADS_DIR,
     AVATARS_DIR,
     BASE_DIR,
+    EXPORTS_DIR,
     FONTS_DIR,
     JOBS_DIR,
     MUSIC_DIR,
+    SATISFYING_DIR,
     STATIC_DIR,
     UPLOADS_DIR,
     get_available_fonts,
@@ -36,9 +38,12 @@ from backend.config import (
 from backend.gemini_client import clean_api_key, test_gemini_key
 from backend.hardware import get_hardware_info
 from backend.pipeline import (
+    create_compilation_clip,
     create_custom_clip,
     create_job,
+    export_job_to_account_folder,
     get_job,
+    get_studio_dashboard_stats,
     list_jobs,
     load_existing_jobs,
     mark_clip_published,
@@ -93,6 +98,10 @@ class ProcessRequest(BaseModel):
     ad_mode: str = Field(default="bottom_overlay")
     ad_banner_id: Optional[str] = Field(default=None)
     ad_audio_id: Optional[str] = Field(default=None)
+    enable_satisfying_video: bool = Field(default=False)
+    satisfying_video_id: Optional[str] = Field(default=None)
+    uniquify_video: bool = Field(default=False)
+    auto_cover: bool = Field(default=False)
     search_chat_activity: bool = Field(default=True)
     search_laughter: bool = Field(default=True)
     use_ai_director: bool = Field(default=True)
@@ -130,6 +139,10 @@ class RerenderRequest(BaseModel):
     ad_mode: str = Field(default="bottom_overlay")
     ad_banner_id: Optional[str] = Field(default=None)
     ad_audio_id: Optional[str] = Field(default=None)
+    enable_satisfying_video: bool = Field(default=False)
+    satisfying_video_id: Optional[str] = Field(default=None)
+    uniquify_video: bool = Field(default=False)
+    auto_cover: bool = Field(default=False)
     edited_transcript: Optional[str] = Field(default=None)
     edited_hook_text: Optional[str] = Field(default=None)
     trim_start: Optional[float] = Field(default=None)
@@ -208,6 +221,16 @@ class AccountUpdateRequest(BaseModel):
 class MarkPublishedRequest(BaseModel):
     account_id: str
     account_name: str = ""
+    platform: str = "tiktok"
+
+
+class CompilationRequest(BaseModel):
+    clip_ids: List[str]
+    title: str = ""
+
+
+class ExportFolderRequest(BaseModel):
+    account_name: str = "General"
 
 
 @app.get("/api/accounts")
@@ -254,11 +277,64 @@ def api_clip_local_path(job_id: str, clip_id: str) -> Dict[str, Any]:
 
 @app.post("/api/jobs/{job_id}/clips/{clip_id}/mark-published")
 def api_mark_clip_published(job_id: str, clip_id: str, req: MarkPublishedRequest) -> Dict[str, Any]:
-    updated = mark_clip_published(job_id, clip_id, req.account_id, req.account_name)
+    updated = mark_clip_published(job_id, clip_id, req.account_id, req.account_name, req.platform)
     if not updated:
         raise HTTPException(status_code=404, detail="Клип не найден")
     increment_published(req.account_id)
     return updated
+
+
+@app.post("/api/jobs/{job_id}/compile")
+def api_compile_clips(job_id: str, req: CompilationRequest) -> Dict[str, Any]:
+    try:
+        return create_compilation_clip(job_id, req.clip_ids, req.title)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка склейки: {exc}")
+
+
+@app.post("/api/jobs/{job_id}/export-folder")
+def api_export_folder(job_id: str, req: ExportFolderRequest) -> Dict[str, Any]:
+    try:
+        return export_job_to_account_folder(job_id, req.account_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка экспорта: {exc}")
+
+
+@app.get("/api/dashboard")
+def api_dashboard() -> Dict[str, Any]:
+    return get_studio_dashboard_stats()
+
+
+@app.get("/api/satisfying")
+def api_list_satisfying() -> Dict[str, Any]:
+    items = []
+    for p in sorted(SATISFYING_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
+            items.append({"id": p.name, "name": p.stem})
+    return {"videos": items}
+
+
+@app.post("/api/satisfying")
+async def api_upload_satisfying(file: UploadFile = File(...)) -> Dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Видео не выбрано")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".mp4", ".mov", ".mkv", ".webm"}:
+        raise HTTPException(status_code=400, detail="Поддерживаются форматы: MP4, MOV, MKV, WEBM")
+    safe_stem = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ _-]+", "", Path(file.filename).stem).strip()[:40] or "satisfying"
+    fname = f"sat_{safe_stem}_{uuid.uuid4().hex[:6]}{ext}"
+    dest = SATISFYING_DIR / fname
+    with dest.open("wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    return {"id": fname, "name": safe_stem}
 
 
 @app.get("/api/config")

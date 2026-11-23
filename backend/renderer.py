@@ -1,8 +1,10 @@
 """9:16 vertical video formatter, AI Face Tracking, Stream Split-Screen, Jump-Cuts, Hook Banner, Watermark, Music Ducking & TikTok Subtitles."""
 import json
+import random
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -519,8 +521,19 @@ def _build_video_framing_chain(
     webcam_corner: str = "bottom_left",
     webcam_size: float = 0.28,
     webcam_img_idx: Optional[int] = None,
+    satisfying_idx: Optional[int] = None,
 ) -> str:
     """Build FFmpeg filter chain producing [base] at 1080x1920."""
+    # Feature #1: Bottom Satisfying / Brainrot Split-Screen (Top 1080x960 main + Bottom 1080x960 satisfying loop)
+    if satisfying_idx is not None:
+        return (
+            f"[0:v]scale={VIDEO_W}:960:force_original_aspect_ratio=increase,"
+            f"crop={VIDEO_W}:960,setsar=1[top_main];"
+            f"[{satisfying_idx}:v]scale={VIDEO_W}:960:force_original_aspect_ratio=increase,"
+            f"crop={VIDEO_W}:960,setsar=1[bot_sat];"
+            f"[top_main][bot_sat]vstack=inputs=2,setsar=1[base];"
+        )
+
     if crop_mode == "blur_bg":
         return (
             f"[0:v]split=2[vbg][vfg];"
@@ -685,6 +698,156 @@ def _insert_midroll_ad(
         raise RuntimeError(f"Midroll ad insertion failed: {res.stderr[-400:]}")
 
 
+def _prepend_auto_cover(
+    base_mp4: Path,
+    final_mp4: Path,
+    thumb_jpg: Path,
+    cover_title: str,
+    font_path: str,
+    out_fps: int,
+    tmp_dir: Path,
+    enc_args: List[str],
+) -> None:
+    """
+    Feature #6: Generate a pro TikTok profile cover frame (vignette + bold viral title)
+    and prepend 0.25s at frame #1 so TikTok/Shorts/Reels grids look unified & clickable!
+    """
+    base_meta = probe_video(base_mp4)
+    base_dur = float(base_meta.get("duration") or 5.0)
+    pick_t = min(max(0.4, base_dur * 0.25), max(0.1, base_dur - 0.2))
+
+    raw_frame = tmp_dir / "cover_raw.png"
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", f"{pick_t:.3f}", "-i", str(base_mp4), "-vframes", "1", str(raw_frame)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+    bg = Image.open(raw_frame).convert("RGBA").resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
+    overlay = Image.new("RGBA", (VIDEO_W, VIDEO_H), (0, 0, 0, 95))
+    bg = Image.alpha_composite(bg, overlay)
+    draw = ImageDraw.Draw(bg)
+
+    clean_title = (cover_title or "ТОП МОМЕНТ!").strip().upper()[:64]
+    font = ImageFont.truetype(font_path, 74)
+    max_w = VIDEO_W - 140
+    words = clean_title.split()
+    lines: List[str] = []
+    cur = ""
+    for w in words:
+        cand = f"{cur} {w}".strip()
+        bb = draw.textbbox((0, 0), cand, font=font, stroke_width=8)
+        if cur and (bb[2] - bb[0]) > max_w:
+            lines.append(cur)
+            cur = w
+            if len(lines) >= 3:
+                break
+        else:
+            cur = cand
+    if cur and len(lines) < 3:
+        lines.append(cur)
+
+    line_h = 96
+    total_h = len(lines) * line_h
+    y_start = (VIDEO_H - total_h) // 2
+
+    # Accent yellow bar above title
+    draw.rounded_rectangle([VIDEO_W // 2 - 140, y_start - 48, VIDEO_W // 2 + 140, y_start - 30], radius=9, fill=(255, 230, 0, 255))
+
+    for i, ln in enumerate(lines):
+        bb = draw.textbbox((0, 0), ln, font=font, stroke_width=8)
+        lw = bb[2] - bb[0]
+        tx = (VIDEO_W - lw) // 2 - bb[0]
+        ty = y_start + i * line_h - bb[1]
+        draw.text((tx, ty + 8), ln, font=font, fill=(0, 0, 0, 210), stroke_width=9, stroke_fill=(0, 0, 0, 210))
+        fill_c = (255, 230, 0, 255) if i == len(lines) - 1 else (255, 255, 255, 255)
+        draw.text((tx, ty), ln, font=font, fill=fill_c, stroke_width=8, stroke_fill=(0, 0, 0, 255))
+
+    cover_png = tmp_dir / "cover_final.png"
+    bg_rgb = bg.convert("RGB")
+    bg_rgb.save(cover_png)
+    bg_rgb.save(thumb_jpg, format="JPEG", quality=90)
+
+    fc = (
+        f"[0:v]fps={out_fps},format=yuv420p,setpts=PTS-STARTPTS[cv];"
+        f"anullsrc=r=48000:cl=stereo:d=0.25[ca];"
+        f"[1:v]fps={out_fps},format=yuv420p,setpts=PTS-STARTPTS[mv];"
+        f"[1:a]aresample=48000,aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS[ma];"
+        f"[cv][ca][mv][ma]concat=n=2:v=1:a=1[outv][outa]"
+    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1", "-t", "0.25", "-i", str(cover_png),
+        "-i", str(base_mp4),
+        "-filter_complex", fc,
+        "-map", "[outv]", "-map", "[outa]",
+        *enc_args,
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(final_mp4),
+    ]
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if res.returncode != 0 or not final_mp4.exists():
+        shutil.copy2(base_mp4, final_mp4)
+
+
+def merge_clips_compilation(
+    clip_paths: List[Path],
+    output_mp4: Path,
+    thumb_jpg: Path,
+) -> Path:
+    """Feature #3: Merge 2..6 rendered 9:16 clips into one seamless compilation MP4."""
+    valid = [p for p in clip_paths if p.exists()]
+    if len(valid) < 2:
+        raise ValueError("Выберите минимум 2 клипа для склейки")
+
+    inputs: List[str] = []
+    fc_parts: List[str] = []
+    concat_in: List[str] = []
+    for idx, p in enumerate(valid):
+        inputs.extend(["-i", str(p)])
+        fc_parts.append(
+            f"[{idx}:v]scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=increase,"
+            f"crop={VIDEO_W}:{VIDEO_H},fps=30,format=yuv420p,setsar=1,setpts=PTS-STARTPTS[v{idx}];"
+        )
+        fc_parts.append(
+            f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,asetpts=PTS-STARTPTS[a{idx}];"
+        )
+        concat_in.append(f"[v{idx}][a{idx}]")
+
+    fc = "".join(fc_parts) + "".join(concat_in) + f"concat=n={len(valid)}:v=1:a=1[outv][outa]"
+    hw = get_hardware_info()
+    encoders: List[List[str]] = []
+    if hw.get("has_nvenc"):
+        encoders.append(["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "19", "-b:v", "8M", "-pix_fmt", "yuv420p"])
+    if hw.get("has_videotoolbox"):
+        encoders.append(["-c:v", "h264_videotoolbox", "-b:v", "8M", "-pix_fmt", "yuv420p"])
+    encoders.append(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
+
+    last_err = ""
+    for enc_args in encoders:
+        cmd = [
+            "ffmpeg", "-y", *inputs,
+            "-filter_complex", fc,
+            "-map", "[outv]", "-map", "[outa]",
+            *enc_args,
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(output_mp4),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode == 0 and output_mp4.exists() and output_mp4.stat().st_size > 1024:
+            break
+        last_err = res.stderr[-400:]
+    else:
+        raise RuntimeError(f"Compilation merge failed: {last_err}")
+
+    subprocess.run(
+        ["ffmpeg", "-y", "-ss", "0.5", "-i", str(output_mp4), "-vframes", "1", "-q:v", "3", str(thumb_jpg)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return output_mp4
+
+
 def render_clip(
     source_video: Path,
     output_mp4: Path,
@@ -718,6 +881,10 @@ def render_clip(
     ad_mode: Optional[str] = None,
     ad_banner_path: Optional[Path] = None,
     ad_audio_path: Optional[Path] = None,
+    satisfying_video_path: Optional[Path] = None,
+    uniquify_video: bool = False,
+    auto_cover: bool = False,
+    cover_title: Optional[str] = None,
 ) -> Path:
     """
     Render a 1080x1920 9:16 TikTok MP4 clip with optional subtitles,
@@ -803,6 +970,12 @@ def render_clip(
             webcam_img_idx = next_idx
             next_idx += 1
 
+        satisfying_idx: Optional[int] = None
+        if satisfying_video_path and Path(satisfying_video_path).exists():
+            inputs.extend(["-stream_loop", "-1", "-t", f"{clip_duration:.3f}", "-i", str(satisfying_video_path)])
+            satisfying_idx = next_idx
+            next_idx += 1
+
         hook_idx: Optional[int] = None
         if hook_text and hook_text.strip():
             hook_png = tmp_dir / "hook.png"
@@ -855,13 +1028,22 @@ def render_clip(
             webcam_corner=webcam_corner,
             webcam_size=webcam_size,
             webcam_img_idx=webcam_img_idx,
+            satisfying_idx=satisfying_idx,
         )
-        enhance_step = (
-            "[base]eq=contrast=1.06:saturation=1.14,unsharp=5:5:0.65:5:5:0.0[base_e];"
-            if video_enhance
-            else ""
-        )
-        base_label = "base_e" if video_enhance else "base"
+        enhance_filters: List[str] = []
+        if video_enhance:
+            enhance_filters.append("eq=contrast=1.06:saturation=1.14,unsharp=5:5:0.65:5:5:0.0")
+        if uniquify_video:
+            # Feature #14: subtle imperceptible anti-duplicate shift (micro-color + 1.015x micro-crop)
+            u_b = round(random.uniform(-0.015, 0.015), 3)
+            u_c = round(random.uniform(0.99, 1.025), 3)
+            u_s = round(random.uniform(0.99, 1.035), 3)
+            rx = random.randint(2, 14)
+            ry = random.randint(2, 22)
+            enhance_filters.append(f"eq=brightness={u_b}:contrast={u_c}:saturation={u_s},scale=1096:1948,crop=1080:1920:{rx}:{ry},setsar=1")
+
+        enhance_step = f"[base]{','.join(enhance_filters)}[base_e];" if enhance_filters else ""
+        base_label = "base_e" if enhance_filters else "base"
 
         fc = f"{video_chain}{enhance_step}"
         if sub_idx is not None:
@@ -932,7 +1114,9 @@ def render_clip(
             encoders.append(["-c:v", "h264_videotoolbox", "-b:v", bitrate, "-pix_fmt", "yuv420p"])
         encoders.append(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
 
-        render_target = (tmp_dir / "pre_midroll.mp4") if has_midroll_ad else output_mp4
+        need_post = has_midroll_ad or auto_cover
+        render_target = (tmp_dir / "pre_post.mp4") if need_post else output_mp4
+        meta_tag = f"tikcut_{uuid.uuid4().hex[:12]}" if uniquify_video else "tikcut_studio"
         used_enc_args = encoders[-1]
         last_err = ""
         for enc_args in encoders:
@@ -951,6 +1135,8 @@ def render_clip(
                 "aac",
                 "-b:a",
                 "192k",
+                "-metadata",
+                f"comment={meta_tag}",
                 "-movflags",
                 "+faststart",
                 str(render_target),
@@ -963,33 +1149,48 @@ def render_clip(
         else:
             raise RuntimeError(f"FFmpeg clip render failed: {last_err}")
 
+        cur_mp4 = render_target
         if has_midroll_ad:
+            mid_out = (tmp_dir / "post_midroll.mp4") if auto_cover else output_mp4
             _insert_midroll_ad(
-                base_mp4=render_target,
-                final_mp4=output_mp4,
+                base_mp4=cur_mp4,
+                final_mp4=mid_out,
                 ad_banner_path=Path(ad_banner_path),
                 ad_audio_path=Path(ad_audio_path) if ad_audio_path else None,
                 out_fps=out_fps,
                 tmp_dir=tmp_dir,
                 enc_args=used_enc_args,
             )
+            cur_mp4 = mid_out
 
-        # Generate crisp preview thumbnail at ~25% into the clip
-        thumb_t = min(max(0.5, clip_duration * 0.25), max(0.1, clip_duration - 0.2))
-        thumb_cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            f"{thumb_t:.2f}",
-            "-i",
-            str(output_mp4),
-            "-vframes",
-            "1",
-            "-q:v",
-            "3",
-            str(thumb_jpg),
-        ]
-        subprocess.run(thumb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if auto_cover:
+            _prepend_auto_cover(
+                base_mp4=cur_mp4,
+                final_mp4=output_mp4,
+                thumb_jpg=thumb_jpg,
+                cover_title=cover_title or hook_text or "ТОП МОМЕНТ!",
+                font_path=font_path,
+                out_fps=out_fps,
+                tmp_dir=tmp_dir,
+                enc_args=used_enc_args,
+            )
+        else:
+            # Generate crisp preview thumbnail at ~25% into the clip
+            thumb_t = min(max(0.5, clip_duration * 0.25), max(0.1, clip_duration - 0.2))
+            thumb_cmd = [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                f"{thumb_t:.2f}",
+                "-i",
+                str(output_mp4),
+                "-vframes",
+                "1",
+                "-q:v",
+                "3",
+                str(thumb_jpg),
+            ]
+            subprocess.run(thumb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         return output_mp4
     finally:
