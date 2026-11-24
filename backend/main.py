@@ -61,6 +61,7 @@ from backend.pipeline import (
     rerender_single_clip,
     start_batch_urls,
     start_processing,
+    start_twitch_clips_batch_job,
     toggle_clip_favorite,
     update_clip_title,
 )
@@ -1490,3 +1491,18 @@ def api_monitor_favorite_streamers(req: MonitorStreamersRequest) -> Dict[str, An
 
     all_clips.sort(key=lambda c: int(c.get("views") or 0), reverse=True)
     return {"clips": all_clips[:24], "count": len(all_clips[:24])}
+
+
+class BatchTwitchClipsRequest(BaseModel):
+    clips: List[Dict[str, Any]]
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/twitch-clips/batch-render")
+def api_batch_render_twitch_clips(req: BatchTwitchClipsRequest) -> Dict[str, Any]:
+    try:
+        return start_twitch_clips_batch_job(req.clips, req.options)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка пакетного рендера: {exc}")

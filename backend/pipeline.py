@@ -1702,3 +1702,166 @@ def multi_render_clip_for_accounts(job_id: str, clip_id: str, base_options: Dict
 
     (out_dir / "captions_by_account.txt").write_text("\n".join(cap_lines), encoding="utf-8")
     return {"folder": str(out_dir.resolve()), "count": len(rendered_accs), "accounts": rendered_accs}
+
+
+def start_twitch_clips_batch_job(
+    clips_list: List[Dict[str, Any]],
+    options: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    v3.2.0: Download, transcribe, and render a batch of selected Twitch clips (or short URLs)
+    into ONE unified project so all clips appear together in one gallery, ZIP, folder export & Telegram!
+    """
+    clean_clips = [c for c in (clips_list or []) if (c.get("url") or "").strip().startswith(("http://", "https://"))][:20]
+    if not clean_clips:
+        raise ValueError("Выберите хотя бы один клип для пакетного рендера")
+
+    job_id = f"pack_{int(time.time())}"
+    first_streamer = (clean_clips[0].get("streamer") or "Twitch").strip()
+    total_dur = sum(float(c.get("duration") or 30.0) for c in clean_clips)
+    job = {
+        "job_id": job_id,
+        "source_type": "remote_pack",
+        "original_filename": f"📦 Пачка клипов ({len(clean_clips)} шт. • {first_streamer})",
+        "video_path": None,
+        "remote_url": clean_clips[0]["url"],
+        "video_meta": {
+            "duration": round(total_dur, 1),
+            "width": 1920,
+            "height": 1080,
+            "fps": 30,
+            "thumbnail": clean_clips[0].get("thumbnail") or "",
+        },
+        "status": "processing",
+        "stage": "starting",
+        "progress": 2,
+        "message": f"Пакетный рендер {len(clean_clips)} выбранных клипов...",
+        "options": dict(options),
+        "clips": [],
+        "words_count": 0,
+        "error": None,
+        "created_at": time.time(),
+    }
+    with _LOCK:
+        _CANCELLED_JOBS.discard(job_id)
+        _JOBS[job_id] = job
+        _save_job(job)
+
+    def _worker() -> None:
+        try:
+            jdir = _job_dir(job_id)
+            whisper_model = options.get("whisper_model", "small")
+            rendered_clips: List[Dict[str, Any]] = []
+            total_words = 0
+            n_total = len(clean_clips)
+
+            for idx, item in enumerate(clean_clips, start=1):
+                if is_job_cancelled(job_id):
+                    _update_job(job_id, status="cancelled", stage="cancelled", message="⏹ Пакетный рендер остановлен.", clips=rendered_clips)
+                    return
+
+                clip_id = f"clip_{idx:02d}"
+                base_pct = int(((idx - 1) / n_total) * 94) + 3
+                c_title = (item.get("title") or f"Клип #{idx}").strip()
+                c_url = item["url"].strip()
+                c_dur = float(item.get("duration") or 45.0)
+
+                _update_job(
+                    job_id,
+                    stage="rendering",
+                    progress=base_pct,
+                    message=f"Клип {idx}/{n_total}: загрузка «{c_title[:36]}»...",
+                )
+                raw_seg_path = jdir / f"raw_seg_{clip_id}.mp4"
+                try:
+                    raw_seg_path = download_clip_segment(c_url, 0.0, max(5.0, c_dur + 2.0), raw_seg_path)
+                except Exception as dl_err:
+                    print(f"[batch_pack] clip {idx} download failed: {dl_err}")
+                    continue
+
+                seg_meta = probe_video(raw_seg_path)
+                seg_dur = float(seg_meta.get("duration") or c_dur or 20.0)
+
+                clip_words: List[Dict[str, Any]] = []
+                transcript_txt = ""
+                if options.get("enable_subtitles", True):
+                    _update_job(
+                        job_id,
+                        stage="transcribing",
+                        progress=min(96, base_pct + int(30 / n_total)),
+                        message=f"Клип {idx}/{n_total}: распознавание субтитров (Whisper)...",
+                    )
+                    seg_wav = jdir / f"seg_{clip_id}.wav"
+                    try:
+                        extract_audio_wav(raw_seg_path, seg_wav)
+                        _, clip_words = transcribe_russian(seg_wav, total_duration=seg_dur, model_size=whisper_model)
+                        transcript_txt = " ".join(w["word"] for w in clip_words).strip()
+                        total_words += len(clip_words)
+                        (jdir / f"{clip_id}_words.json").write_text(json.dumps(clip_words, ensure_ascii=False), encoding="utf-8")
+                    except Exception as tr_err:
+                        print(f"[batch_pack] transcribe error on {clip_id}: {tr_err}")
+                    finally:
+                        seg_wav.unlink(missing_ok=True)
+
+                _update_job(
+                    job_id,
+                    stage="rendering",
+                    progress=min(97, base_pct + int(60 / n_total)),
+                    message=f"Клип {idx}/{n_total}: рендер 9:16 «{c_title[:36]}»...",
+                )
+                out_mp4 = jdir / f"{clip_id}.mp4"
+                out_thumb = jdir / f"{clip_id}.jpg"
+                r_kwargs = _extract_render_kwargs(options, c_title)
+                render_clip(
+                    source_video=raw_seg_path,
+                    output_mp4=out_mp4,
+                    thumb_jpg=out_thumb,
+                    clip_start=0.0,
+                    clip_end=seg_dur,
+                    words=clip_words,
+                    **r_kwargs,
+                )
+
+                tags = ["📦 Пачка клипов"]
+                if item.get("streamer"):
+                    tags.append(f"🎮 {item['streamer']}")
+                hl_out = {
+                    "id": clip_id,
+                    "index": idx,
+                    "start": 0.0,
+                    "end": round(seg_dur, 2),
+                    "duration": round(seg_dur, 2),
+                    "title": c_title,
+                    "hook_text": c_title,
+                    "transcript": transcript_txt,
+                    "viral_score": min(99, max(82, 85 + min(14, int(item.get("views", 0) / 2000)))),
+                    "tags": tags,
+                    "tiktok_caption": generate_tiktok_caption(c_title, transcript_txt, tags, item.get("streamer", "")),
+                    "raw_segment_path": str(raw_seg_path),
+                    "raw_segment_duration": round(seg_dur, 2),
+                    "trim_start": 0.0,
+                    "trim_end": round(seg_dur, 2),
+                    "version": int(time.time()),
+                    "file_size_mb": round(out_mp4.stat().st_size / (1024 * 1024), 2),
+                    "ad_banner_id": options.get("ad_banner_id") if options.get("enable_ad_banner") else None,
+                }
+                rendered_clips.append(hl_out)
+                _update_job(job_id, clips=rendered_clips, words_count=total_words)
+
+            tg_sent = _auto_send_clips_to_telegram(job_id, rendered_clips, options)
+            tg_note = f" • ✈️ Отправлено в Telegram: {tg_sent}" if tg_sent > 0 else ""
+            _update_job(
+                job_id,
+                status="completed",
+                stage="completed",
+                progress=100,
+                message=f"Готово! Пачка из {len(rendered_clips)} клипов 9:16 собрана.{tg_note}",
+                clips=rendered_clips,
+                words_count=total_words,
+            )
+        except Exception as exc:
+            traceback.print_exc()
+            _update_job(job_id, status="failed", stage="failed", error=str(exc), message=f"Ошибка пакетного рендера: {exc}")
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return dict(job)

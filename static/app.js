@@ -45,6 +45,9 @@
   const radarPeriodSelect = document.getElementById('radarPeriodSelect');
   const btnSearchTwitchClips = document.getElementById('btnSearchTwitchClips');
   const radarMeta = document.getElementById('radarMeta');
+  const btnRadarSelectAll = document.getElementById('btnRadarSelectAll');
+  const btnRadarBatchSelected = document.getElementById('btnRadarBatchSelected');
+  const radarSelectedCount = document.getElementById('radarSelectedCount');
   const btnRadarTop5Batch = document.getElementById('btnRadarTop5Batch');
   const radarResultsGrid = document.getElementById('radarResultsGrid');
   const liveStreamUrlInput = document.getElementById('liveStreamUrlInput');
@@ -1238,9 +1241,55 @@
     e.stopPropagation();
     fileInput.click();
   });
+  async function handleLocalFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    if (files.length === 1) {
+      uploadFile(files[0]);
+      return;
+    }
+    showToast(`📦 Запущена пачка из ${files.length} локальных файлов!`);
+    const opts = getCurrentOptions(0);
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      showToast(`📤 Файл ${i + 1}/${files.length}: ${f.name}`);
+      const fd = new FormData();
+      fd.append('file', f);
+      try {
+        const upRes = await fetch('/api/upload', { method: 'POST', body: fd });
+        if (!upRes.ok) continue;
+        const job = await upRes.json();
+        state.currentJobId = job.job_id;
+        showUploadedJob(job);
+        const procRes = await fetch(`/api/jobs/${job.job_id}/process`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(opts),
+        });
+        if (!procRes.ok) continue;
+        progressSection.classList.remove('hidden');
+        // Wait until this job finishes before starting the next local file
+        while (true) {
+          await new Promise((r) => setTimeout(r, 1600));
+          const stRes = await fetch(`/api/jobs/${job.job_id}`);
+          if (!stRes.ok) break;
+          const stJob = await stRes.json();
+          updateJobUI(stJob);
+          if (stJob.status === 'completed' || stJob.status === 'failed' || stJob.status === 'cancelled') {
+            refreshHistory();
+            if (stJob.status === 'cancelled') return;
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+    notifyRenderDone('📦 Пачка файлов готова!', `Обработано файлов: ${files.length}`);
+    showToast(`✅ Готово! Все ${files.length} файлов обработаны и сохранены в Истории!`);
+  }
+
   dropZone.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
-    if (fileInput.files && fileInput.files[0]) uploadFile(fileInput.files[0]);
+    if (fileInput.files && fileInput.files.length) handleLocalFiles(fileInput.files);
   });
   btnChangeVideo.addEventListener('click', () => {
     const activeTab = sourceTabs.querySelector('.source-tab.active')?.dataset.tab || 'url';
@@ -1261,8 +1310,7 @@
     });
   });
   dropZone.addEventListener('drop', (e) => {
-    const file = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (file) uploadFile(file);
+    if (e.dataTransfer.files && e.dataTransfer.files.length) handleLocalFiles(e.dataTransfer.files);
   });
 
   // Settings listeners
@@ -3167,8 +3215,133 @@
     }
   }
 
-  // #1 Twitch Top Clips Radar
+  // #1 Twitch Top Clips Radar + Batch Selection Pack (v3.2.0)
   let lastRadarClips = [];
+  const selectedRadarIdx = new Set();
+
+  function updateRadarBatchUI() {
+    const n = selectedRadarIdx.size;
+    if (radarSelectedCount) radarSelectedCount.textContent = String(n);
+    if (btnRadarBatchSelected) btnRadarBatchSelected.classList.toggle('hidden', n === 0);
+    if (btnRadarSelectAll) {
+      btnRadarSelectAll.classList.toggle('hidden', lastRadarClips.length === 0);
+      btnRadarSelectAll.textContent = n > 0 && n === lastRadarClips.length ? '⬜ Снять все' : '☑️ Выбрать все';
+    }
+  }
+
+  function renderRadarCards(clips, showStreamer = false) {
+    lastRadarClips = clips || [];
+    selectedRadarIdx.clear();
+    updateRadarBatchUI();
+    if (btnRadarTop5Batch) btnRadarTop5Batch.classList.toggle('hidden', lastRadarClips.length < 2);
+    if (!radarResultsGrid) return;
+    radarResultsGrid.classList.toggle('hidden', !lastRadarClips.length);
+    radarResultsGrid.innerHTML = lastRadarClips.map((c, idx) => `
+      <div class="radar-card" data-ridx="${idx}">
+        <label class="radar-cb-wrap" title="Выбрать для пакетного рендера">
+          <input type="checkbox" class="radar-select-cb" data-idx="${idx}" />
+        </label>
+        ${c.thumbnail ? `<img src="${escapeHtml(c.thumbnail)}" alt="" loading="lazy" class="btn-radar-watch" data-idx="${idx}" style="cursor:pointer;" title="Нажмите для предпросмотра" />` : ''}
+        <div class="radar-card-body">
+          <div class="radar-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
+          <div class="radar-meta">${showStreamer && c.streamer ? `<strong>${escapeHtml(c.streamer)}</strong> • ` : ''}👁 ${Number(c.views || 0).toLocaleString('ru-RU')} • ⏱ ${c.duration}с ${!showStreamer && c.game ? '• ' + escapeHtml(c.game) : ''}</div>
+          <div style="display:flex;gap:6px;margin-top:auto;">
+            <button type="button" class="btn btn-secondary btn-sm btn-radar-watch" data-idx="${idx}" style="flex:1;">▶ Смотреть</button>
+            <button type="button" class="btn btn-primary btn-sm btn-radar-pick" data-idx="${idx}" style="flex:1;">⚡ В 9:16</button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+
+    radarResultsGrid.querySelectorAll('.radar-select-cb').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        const idx = Number(cb.dataset.idx);
+        const card = cb.closest('.radar-card');
+        if (cb.checked) {
+          selectedRadarIdx.add(idx);
+          if (card) card.classList.add('selected');
+        } else {
+          selectedRadarIdx.delete(idx);
+          if (card) card.classList.remove('selected');
+        }
+        updateRadarBatchUI();
+      });
+    });
+    radarResultsGrid.querySelectorAll('.btn-radar-watch').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const clip = lastRadarClips[Number(btn.dataset.idx)];
+        if (clip) openRadarClipPreview(clip);
+      });
+    });
+    radarResultsGrid.querySelectorAll('.btn-radar-pick').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const clip = lastRadarClips[Number(btn.dataset.idx)];
+        if (!clip) return;
+        switchSourceTab('url');
+        urlInput.value = clip.url;
+        await probeUrl();
+      });
+    });
+  }
+
+  async function runRadarBatchPack(clipsToRender, triggerBtn) {
+    if (!clipsToRender.length) return showToast('Сначала выберите клипы галочками');
+    const opts = getCurrentOptions(0);
+    if (opts.enable_ad_banner && !opts.ad_banner_id) {
+      return showToast('⚠️ Включён «Рекламный баннер», но файл не выбран (вкладка «⚡ Эффекты»)');
+    }
+    if (opts.enable_satisfying_video && !opts.satisfying_video_id) {
+      return showToast('⚠️ Включена «Залипашка снизу», но видео не выбрано');
+    }
+    if (triggerBtn) triggerBtn.disabled = true;
+    try {
+      const res = await fetch('/api/twitch-clips/batch-render', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clips: clipsToRender, options: opts }),
+      });
+      const job = await res.json();
+      if (!res.ok) throw new Error(job.detail || 'Ошибка запуска пакетного рендера');
+      state.currentJobId = job.job_id;
+      state.jobStartTime = Date.now();
+      progressSection.classList.remove('hidden');
+      updateJobUI(job);
+      startPolling(job.job_id);
+      showToast(`⚡ Запущена пачка из ${clipsToRender.length} клипов в 9:16!`);
+    } catch (err) {
+      showToast(err.message || 'Ошибка пакетного рендера');
+    } finally {
+      if (triggerBtn) triggerBtn.disabled = false;
+    }
+  }
+
+  if (btnRadarSelectAll) {
+    btnRadarSelectAll.addEventListener('click', () => {
+      const allSelected = selectedRadarIdx.size === lastRadarClips.length && lastRadarClips.length > 0;
+      selectedRadarIdx.clear();
+      radarResultsGrid?.querySelectorAll('.radar-select-cb').forEach((cb) => {
+        cb.checked = !allSelected;
+        const card = cb.closest('.radar-card');
+        if (!allSelected) {
+          selectedRadarIdx.add(Number(cb.dataset.idx));
+          if (card) card.classList.add('selected');
+        } else if (card) {
+          card.classList.remove('selected');
+        }
+      });
+      updateRadarBatchUI();
+    });
+  }
+  if (btnRadarBatchSelected) {
+    btnRadarBatchSelected.addEventListener('click', () => {
+      const chosen = Array.from(selectedRadarIdx)
+        .sort((a, b) => a - b)
+        .map((i) => lastRadarClips[i])
+        .filter(Boolean);
+      runRadarBatchPack(chosen, btnRadarBatchSelected);
+    });
+  }
+
   if (btnSearchTwitchClips && radarStreamerInput) {
     const runRadarSearch = async () => {
       const streamer = (radarStreamerInput.value || '').trim();
@@ -3187,44 +3360,13 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || 'Не удалось загрузить клипы');
-        lastRadarClips = data.clips || [];
+        const clips = data.clips || [];
         if (radarMeta) {
-          radarMeta.textContent = lastRadarClips.length
-            ? `Найдено ${lastRadarClips.length} топ-клипов канала ${lastRadarClips[0].streamer}`
+          radarMeta.textContent = clips.length
+            ? `Найдено ${clips.length} топ-клипов канала ${clips[0].streamer} — отметьте нужные галочками!`
             : 'За выбранный период клипов не найдено';
         }
-        if (btnRadarTop5Batch) btnRadarTop5Batch.classList.toggle('hidden', lastRadarClips.length < 2);
-        if (radarResultsGrid) {
-          radarResultsGrid.classList.toggle('hidden', !lastRadarClips.length);
-          radarResultsGrid.innerHTML = lastRadarClips.map((c, idx) => `
-            <div class="radar-card">
-              ${c.thumbnail ? `<img src="${escapeHtml(c.thumbnail)}" alt="" loading="lazy" class="btn-radar-watch" data-idx="${idx}" style="cursor:pointer;" title="Нажмите для предпросмотра" />` : ''}
-              <div class="radar-card-body">
-                <div class="radar-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
-                <div class="radar-meta">👁 ${Number(c.views || 0).toLocaleString('ru-RU')} • ⏱ ${c.duration}с ${c.game ? '• ' + escapeHtml(c.game) : ''}</div>
-                <div style="display:flex;gap:6px;margin-top:auto;">
-                  <button type="button" class="btn btn-secondary btn-sm btn-radar-watch" data-idx="${idx}" style="flex:1;">▶ Смотреть</button>
-                  <button type="button" class="btn btn-primary btn-sm btn-radar-pick" data-idx="${idx}" style="flex:1;">⚡ В 9:16</button>
-                </div>
-              </div>
-            </div>
-          `).join('');
-          radarResultsGrid.querySelectorAll('.btn-radar-watch').forEach((btn) => {
-            btn.addEventListener('click', () => {
-              const clip = lastRadarClips[Number(btn.dataset.idx)];
-              if (clip) openRadarClipPreview(clip);
-            });
-          });
-          radarResultsGrid.querySelectorAll('.btn-radar-pick').forEach((btn) => {
-            btn.addEventListener('click', async () => {
-              const clip = lastRadarClips[Number(btn.dataset.idx)];
-              if (!clip) return;
-              switchSourceTab('url');
-              urlInput.value = clip.url;
-              await probeUrl();
-            });
-          });
-        }
+        renderRadarCards(clips, false);
       } catch (err) {
         showToast(err.message || 'Ошибка радара Twitch');
       } finally {
@@ -3239,28 +3381,8 @@
   }
 
   if (btnRadarTop5Batch) {
-    btnRadarTop5Batch.addEventListener('click', async () => {
-      const top5 = lastRadarClips.slice(0, 5).map((c) => c.url);
-      if (!top5.length) return;
-      btnRadarTop5Batch.disabled = true;
-      try {
-        const res = await fetch('/api/batch-urls', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ urls: top5, options: { ...getCurrentOptions(0), clip_count: 1 } }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Ошибка запуска очереди');
-        switchSourceTab('url');
-        if (batchQueueBox) batchQueueBox.classList.remove('hidden');
-        renderBatchStatus(data);
-        pollBatchStatus();
-        showToast('🚀 Топ-5 клипов Twitch отправлены в очередь нарезки!');
-      } catch (err) {
-        showToast(err.message || 'Ошибка очереди');
-      } finally {
-        btnRadarTop5Batch.disabled = false;
-      }
+    btnRadarTop5Batch.addEventListener('click', () => {
+      runRadarBatchPack(lastRadarClips.slice(0, 5), btnRadarTop5Batch);
     });
   }
 
@@ -3969,40 +4091,9 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || 'Ошибка монитора');
-        lastRadarClips = data.clips || [];
-        if (radarMeta) radarMeta.textContent = `📡 Монитор (${list.length} каналов): найдено ${lastRadarClips.length} горячих клипов за 24ч`;
-        if (btnRadarTop5Batch) btnRadarTop5Batch.classList.toggle('hidden', lastRadarClips.length < 2);
-        if (radarResultsGrid) {
-          radarResultsGrid.classList.toggle('hidden', !lastRadarClips.length);
-          radarResultsGrid.innerHTML = lastRadarClips.map((c, idx) => `
-            <div class="radar-card">
-              ${c.thumbnail ? `<img src="${escapeHtml(c.thumbnail)}" alt="" loading="lazy" class="btn-radar-watch" data-idx="${idx}" style="cursor:pointer;" title="Нажмите для предпросмотра" />` : ''}
-              <div class="radar-card-body">
-                <div class="radar-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
-                <div class="radar-meta"><strong>${escapeHtml(c.streamer)}</strong> • 👁 ${Number(c.views || 0).toLocaleString('ru-RU')} • ${c.duration}с</div>
-                <div style="display:flex;gap:6px;margin-top:auto;">
-                  <button type="button" class="btn btn-secondary btn-sm btn-radar-watch" data-idx="${idx}" style="flex:1;">▶ Смотреть</button>
-                  <button type="button" class="btn btn-primary btn-sm btn-radar-pick" data-idx="${idx}" style="flex:1;">⚡ В 9:16</button>
-                </div>
-              </div>
-            </div>
-          `).join('');
-          radarResultsGrid.querySelectorAll('.btn-radar-watch').forEach((btn) => {
-            btn.addEventListener('click', () => {
-              const clip = lastRadarClips[Number(btn.dataset.idx)];
-              if (clip) openRadarClipPreview(clip);
-            });
-          });
-          radarResultsGrid.querySelectorAll('.btn-radar-pick').forEach((btn) => {
-            btn.addEventListener('click', async () => {
-              const clip = lastRadarClips[Number(btn.dataset.idx)];
-              if (!clip) return;
-              switchSourceTab('url');
-              urlInput.value = clip.url;
-              await probeUrl();
-            });
-          });
-        }
+        const clips = data.clips || [];
+        if (radarMeta) radarMeta.textContent = `📡 Монитор (${list.length} каналов): найдено ${clips.length} горячих клипов за 24ч — отметьте нужные галочками!`;
+        renderRadarCards(clips, true);
       } catch (err) {
         showToast(err.message || 'Ошибка монитора');
       } finally {

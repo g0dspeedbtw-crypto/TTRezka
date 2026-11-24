@@ -139,11 +139,11 @@
         <!-- Tab 2: Local file upload -->
         <div id="filePanel" class="hidden">
           <div id="dropZone" class="drop-zone">
-            <input id="fileInput" type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v,.avi" hidden />
+            <input id="fileInput" type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.m4v,.avi" multiple hidden />
             <div class="drop-icon">🎬</div>
-            <div class="drop-title">Перетащите видео сюда или нажмите для выбора</div>
-            <div class="drop-hint">MP4, MOV, MKV, WEBM • Любая длительность • Всё обрабатывается локально</div>
-            <button id="btnPickFile" type="button" class="btn btn-secondary">Выбрать файл</button>
+            <div class="drop-title">Перетащите одно или сразу несколько видео сюда</div>
+            <div class="drop-hint">MP4, MOV, MKV, WEBM • Можно закинуть пачку файлов • Всё обрабатывается локально</div>
+            <button id="btnPickFile" type="button" class="btn btn-secondary">Выбрать файл(ы)</button>
           </div>
 
           <div id="uploadProgressWrap" class="upload-progress hidden">
@@ -174,9 +174,13 @@
             <span id="favStreamersList" style="display:inline-flex;gap:5px;flex-wrap:wrap;"></span>
             <button id="btnMonitorFavStreamers" type="button" class="btn btn-secondary btn-sm hidden" style="margin-left:auto;">📡 Проверить всех (24ч)</button>
           </div>
-          <div class="music-row" style="justify-content: space-between; margin-bottom: 8px;">
-            <span id="radarMeta" class="history-meta">Находит Топ-20 самых популярных клипов зрителей — в 1 клик в 9:16!</span>
-            <button id="btnRadarTop5Batch" type="button" class="btn btn-secondary btn-sm hidden">🚀 Топ-5 в очередь</button>
+          <div class="music-row" style="justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 6px;">
+            <span id="radarMeta" class="history-meta">Отмечайте галочками нужные клипы (можно сначала посмотреть) и делайте пачкой в 9:16!</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button id="btnRadarSelectAll" type="button" class="btn btn-ghost btn-sm hidden">☑️ Выбрать все</button>
+              <button id="btnRadarBatchSelected" type="button" class="btn btn-primary btn-sm hidden">⚡ Сделать пачкой (<span id="radarSelectedCount">0</span>)</button>
+              <button id="btnRadarTop5Batch" type="button" class="btn btn-secondary btn-sm hidden">🚀 Топ-5 пачкой</button>
+            </div>
           </div>
           <div id="radarResultsGrid" class="radar-grid hidden"></div>
         </div>
