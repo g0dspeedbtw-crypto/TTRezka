@@ -5,6 +5,14 @@
 
 ---
 
+## [3.1.1] — 2026-11-24 (Fix Clip Downloads in Desktop App & Remote Streams)
+
+### 🐛 Исправление скачивания клипов
+- **Надежное сохранение готовых MP4 / ZIP / SRT / Бэкапов в Electron**: добавлен нативный обработчик `will-download`, который сразу сохраняет файл в папку **«Загрузки» (`Downloads`)**, показывает уведомление `✅ Сохранено в Загрузки` и открывает файл в Finder / Проводнике.
+- **Исправлено скачивание фрагментов и клипов Twitch/YouTube**: в `yt-dlp` теперь всегда передаётся точный путь к `ffmpeg`, для коротких клипов Twitch (`clips.twitch.tv`) и Shorts отключён конфликтный `download_ranges`, а при любой ошибке `yt-dlp` автоматически срабатывает резервная вырезка напрямую через `FFmpeg`.
+
+---
+
 ## [3.1.0] — 2026-11-23 (TikTok Lightbox, Sort/Filter, Multi-Account Render, Streamer Monitor, PNG Logos, Custom Fonts, SRT Export & Asset Cleanup)
 
 ### 🚀 8 мощных финальных фич студии

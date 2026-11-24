@@ -339,6 +339,15 @@
         document.body.classList.add('is-mac-desktop');
       }
       initDesktopUpdater();
+      if (window.tikcutDesktop.onDownloadDone) {
+        window.tikcutDesktop.onDownloadDone((info) => {
+          if (info && info.ok) {
+            showToast(`✅ Сохранено в Загрузки: ${info.filename}`);
+          } else {
+            showToast('⚠️ Не удалось скачать файл');
+          }
+        });
+      }
     }
     const res = await fetch('/api/config');
     const cfg = await res.json();

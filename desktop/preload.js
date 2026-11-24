@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('tikcutDesktop', {
   openFolder: (folderPath) => ipcRenderer.invoke('app:open-folder', folderPath),
   setProgress: (progress, active) => ipcRenderer.invoke('app:set-progress', { progress, active }),
   minimizeToTray: () => ipcRenderer.invoke('app:minimize-to-tray'),
+  onDownloadDone: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('app:download-done', handler);
+    return () => ipcRenderer.removeListener('app:download-done', handler);
+  },
   onUpdateStatus: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('updater:status', handler);

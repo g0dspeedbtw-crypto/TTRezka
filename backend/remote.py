@@ -3,6 +3,7 @@ import json
 import math
 import random
 import re
+import shutil
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -23,7 +24,7 @@ from backend.twitch_chat import analyze_twitch_chat_peaks, extract_twitch_vod_id
 
 
 def _apply_network_opts(ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
-    """Feature #59: Apply user-configured Proxy and Browser Cookies to yt-dlp."""
+    """Feature #59: Apply user-configured Proxy, Browser Cookies & explicit ffmpeg_location to yt-dlp."""
     cfg = load_settings()
     proxy = (cfg.get("yt_proxy") or "").strip()
     if proxy:
@@ -31,6 +32,9 @@ def _apply_network_opts(ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
     browser = (cfg.get("yt_cookies_browser") or "").strip().lower()
     if browser in ("chrome", "edge", "firefox", "safari", "brave", "opera", "chromium"):
         ydl_opts["cookiesfrombrowser"] = (browser,)
+    ff_bin = shutil.which("ffmpeg")
+    if ff_bin:
+        ydl_opts["ffmpeg_location"] = str(Path(ff_bin).parent)
     return ydl_opts
 
 
@@ -666,33 +670,79 @@ def download_clip_segment(
     output_mp4: Path,
 ) -> Path:
     """
-    Surgically download ONLY the [start, end] clip window from YouTube / Twitch VOD
-    without downloading the full stream!
+    Surgically download ONLY the [start, end] clip window from YouTube / Twitch VOD / Twitch Clips
+    without downloading the full stream, with automatic fallback if download_ranges fails!
     """
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
     if output_mp4.exists():
         output_mp4.unlink()
 
     out_tpl = str(output_mp4.with_suffix("")) + ".%(ext)s"
-    ydl_opts = _apply_network_opts({
+    is_short_clip_url = bool(re.search(r"clips\.twitch\.tv|/clip/|/shorts/", url or "", re.IGNORECASE))
+    s_t = max(0.0, float(start))
+    e_t = max(s_t + 1.0, float(end))
+
+    def _locate_downloaded() -> Optional[Path]:
+        if output_mp4.exists() and output_mp4.stat().st_size > 4096:
+            return output_mp4
+        for cand in sorted(output_mp4.parent.glob(output_mp4.stem + ".*")):
+            if cand.is_file() and cand.stat().st_size > 4096 and not cand.name.endswith(".part"):
+                return cand
+        return None
+
+    # Attempt 1: For Twitch Clips / Shorts, download whole clip directly (fast & never breaks on ranges!)
+    # For long VODs, use yt-dlp download_ranges.
+    base_opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]/best",
         "merge_output_format": "mp4",
         "outtmpl": out_tpl,
-        "download_ranges": download_range_func(None, [(max(0.0, start), max(start + 1.0, end))]),
-        "force_keyframes_at_cuts": True,
         "concurrent_fragment_downloads": 4,
-    })
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    }
+    if not is_short_clip_url:
+        base_opts["download_ranges"] = download_range_func(None, [(s_t, e_t)])
+        base_opts["force_keyframes_at_cuts"] = True
 
-    if output_mp4.exists():
-        return output_mp4
+    try:
+        with yt_dlp.YoutubeDL(_apply_network_opts(dict(base_opts))) as ydl:
+            ydl.download([url])
+        found = _locate_downloaded()
+        if found:
+            return found
+    except Exception as exc1:
+        print(f"[remote] yt-dlp primary download failed ({exc1}), trying direct FFmpeg stream fallback...")
 
-    # yt-dlp might have written another extension before merge; locate it
-    candidates = list(output_mp4.parent.glob(output_mp4.stem + ".*"))
-    if candidates:
-        return candidates[0]
-    raise RuntimeError("Не удалось загрузить выбранный фрагмент по ссылке")
+    # Attempt 2 (Fallback): Resolve direct media URL with yt-dlp and slice cleanly via FFmpeg!
+    try:
+        info_opts = _apply_network_opts({
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "format": "best[height<=1080][ext=mp4]/best[height<=1080]/best",
+        })
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        media_url = (info or {}).get("url")
+        if media_url:
+            dur = max(2.0, e_t - s_t)
+            cmd = ["ffmpeg", "-y"]
+            if not is_short_clip_url and s_t > 0.5:
+                cmd.extend(["-ss", f"{s_t:.2f}"])
+            cmd.extend(["-i", media_url])
+            if not is_short_clip_url:
+                cmd.extend(["-t", f"{dur:.2f}"])
+            cmd.extend([
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+                str(output_mp4),
+            ])
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=max(60, int(dur * 4)))
+            found = _locate_downloaded()
+            if found:
+                return found
+    except Exception as exc2:
+        print(f"[remote] FFmpeg fallback failed: {exc2}")
+
+    raise RuntimeError("Не удалось загрузить выбранный фрагмент по ссылке (попробуйте включить Cookies браузера во вкладке «⚙️ Система»)")

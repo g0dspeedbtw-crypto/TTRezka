@@ -587,6 +587,37 @@ async function createWindow() {
 app.whenReady().then(() => {
   setupAutoUpdater();
   setupTray();
+
+  // v3.1.1 Fix: Reliable native file downloads (MP4, ZIP, SRT, CSV, Backup) into Downloads folder!
+  session.defaultSession.on('will-download', (_event, item) => {
+    try {
+      const dlDir = app.getPath('downloads');
+      const origName = item.getFilename() || `tikcut_${Date.now()}.mp4`;
+      const parsed = path.parse(origName);
+      let dest = path.join(dlDir, origName);
+      let counter = 1;
+      while (fs.existsSync(dest)) {
+        dest = path.join(dlDir, `${parsed.name}_${counter}${parsed.ext}`);
+        counter++;
+      }
+      item.setSavePath(dest);
+      item.once('done', (_ev, state) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('app:download-done', {
+            ok: state === 'completed',
+            filename: path.basename(dest),
+            path: dest,
+          });
+        }
+        if (state === 'completed') {
+          shell.showItemInFolder(dest);
+        }
+      });
+    } catch (err) {
+      console.error('[download] handler error:', err);
+    }
+  });
+
   createWindow();
 });
 
