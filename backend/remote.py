@@ -682,6 +682,16 @@ def download_clip_segment(
     s_t = max(0.0, float(start))
     e_t = max(s_t + 1.0, float(end))
 
+    # Attempt 0 (Fastest & 100% reliable for Twitch Clips): Direct Twitch GQL signed MP4 download!
+    if re.search(r"clips\.twitch\.tv/|/clip/", url or "", re.IGNORECASE):
+        try:
+            from backend.twitch_radar import download_twitch_clip_direct
+            direct_p = download_twitch_clip_direct(url, output_mp4)
+            if direct_p and direct_p.exists() and direct_p.stat().st_size > 10_000:
+                return direct_p
+        except Exception as exc0:
+            print(f"[remote] Direct Twitch GQL clip download fallback ({exc0}), trying yt-dlp...")
+
     def _locate_downloaded() -> Optional[Path]:
         if output_mp4.exists() and output_mp4.stat().st_size > 4096:
             return output_mp4

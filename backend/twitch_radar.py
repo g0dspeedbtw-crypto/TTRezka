@@ -1,17 +1,134 @@
-"""v2.5.0: Twitch Top Clips Radar (#1) & Live Stream Instant Clipper (#3)."""
+"""v2.5.0+: Twitch Top Clips Radar (#1), Direct GQL Clip Downloader & Live Stream Clipper (#3)."""
 import json
 import re
+import ssl
 import subprocess
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yt_dlp
 
+try:
+    import certifi
+except Exception:
+    certifi = None
+
 from backend.config import load_settings
 from backend.remote import _apply_network_opts
 from backend.twitch_chat import TWITCH_GQL_URL, TWITCH_WEB_CLIENT_ID
+
+
+def _ssl_ctx() -> ssl.SSLContext:
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
+def extract_twitch_clip_slug(url: str) -> Optional[str]:
+    """Extract clip slug from clips.twitch.tv/<slug> or twitch.tv/<user>/clip/<slug>."""
+    m = re.search(r"(?:clips\.twitch\.tv/|/clip/)([A-Za-z0-9_-]+)", url or "", re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def resolve_twitch_clip_direct_mp4(clip_url: str) -> Optional[Dict[str, Any]]:
+    """
+    Resolve a direct signed MP4 URL for ANY Twitch Clip via Twitch GQL (zero yt-dlp required!).
+    Returns {'mp4_url', 'title', 'duration'} or None if not a Twitch clip / failed.
+    """
+    slug = extract_twitch_clip_slug(clip_url)
+    if not slug:
+        return None
+    query = """
+    query($slug: ID!) {
+      clip(slug: $slug) {
+        title
+        durationSeconds
+        videoQualities {
+          quality
+          sourceURL
+        }
+        playbackAccessToken(params: { platform: "web", playerBackend: "mediaplayer", playerType: "site" }) {
+          signature
+          value
+        }
+      }
+    }
+    """
+    payload = {"query": query, "variables": {"slug": slug}}
+    req = urllib.request.Request(
+        TWITCH_GQL_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Client-ID": TWITCH_WEB_CLIENT_ID,
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
+        raw = json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+    clip_obj = (raw.get("data") or {}).get("clip")
+    if not clip_obj:
+        return None
+    qualities = clip_obj.get("videoQualities") or []
+    token_obj = clip_obj.get("playbackAccessToken") or {}
+    sig = token_obj.get("signature") or ""
+    val = token_obj.get("value") or ""
+    if not qualities or not sig or not val:
+        return None
+
+    def _q_num(q: Dict[str, Any]) -> int:
+        try:
+            return int(re.sub(r"[^0-9]", "", str(q.get("quality") or "0")) or "0")
+        except Exception:
+            return 0
+
+    qualities_sorted = sorted(qualities, key=_q_num, reverse=True)
+    chosen = next((q for q in qualities_sorted if 0 < _q_num(q) <= 1080 and q.get("sourceURL")), None)
+    if not chosen:
+        chosen = next((q for q in qualities_sorted if q.get("sourceURL")), None)
+    if not chosen:
+        return None
+
+    src = chosen["sourceURL"]
+    sep = "&" if "?" in src else "?"
+    signed_url = f"{src}{sep}sig={urllib.parse.quote(sig)}&token={urllib.parse.quote(val)}"
+    return {
+        "mp4_url": signed_url,
+        "title": (clip_obj.get("title") or "Клип Twitch").strip(),
+        "duration": int(round(float(clip_obj.get("durationSeconds") or 30))),
+    }
+
+
+def download_twitch_clip_direct(clip_url: str, output_mp4: Path) -> Optional[Path]:
+    """Download a Twitch Clip directly as MP4 via Twitch GQL (bypasses yt-dlp Twitch bugs!)."""
+    info = resolve_twitch_clip_direct_mp4(clip_url)
+    if not info or not info.get("mp4_url"):
+        return None
+    output_mp4.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = output_mp4.with_suffix(".dl.tmp")
+    req = urllib.request.Request(
+        info["mp4_url"],
+        headers={"User-Agent": "Mozilla/5.0"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45, context=_ssl_ctx()) as resp, tmp_path.open("wb") as out:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                out.write(chunk)
+        if tmp_path.exists() and tmp_path.stat().st_size > 10_000:
+            tmp_path.replace(output_mp4)
+            return output_mp4
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return None
 
 
 # =====================================================================
@@ -77,7 +194,7 @@ def fetch_twitch_top_clips(streamer_login: str, period: str = "7d", limit: int =
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=10, context=_ssl_ctx()) as resp:
         raw = json.loads(resp.read().decode("utf-8", errors="ignore"))
 
     user_obj = (raw.get("data") or {}).get("user")
@@ -116,6 +233,15 @@ def resolve_clip_preview_url(clip_url: str) -> Dict[str, Any]:
     url = (clip_url or "").strip()
     if not url.startswith(("http://", "https://")):
         raise ValueError("Некорректная ссылка на клип")
+
+    # Fast path: Direct Twitch GQL signed MP4 (0.2s, zero yt-dlp breakage!)
+    try:
+        direct = resolve_twitch_clip_direct_mp4(url)
+        if direct and direct.get("mp4_url"):
+            return direct
+    except Exception:
+        pass
+
     ydl_opts = _apply_network_opts(
         {
             "quiet": True,

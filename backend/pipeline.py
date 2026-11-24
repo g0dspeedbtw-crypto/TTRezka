@@ -1814,6 +1814,7 @@ def start_twitch_clips_batch_job(
                 return idx_1, None
 
             dl_count = 0
+            last_dl_err = ""
             with ThreadPoolExecutor(max_workers=min(4, n_total)) as dl_pool:
                 for idx_1, p_path in dl_pool.map(_dl_pack_item, enumerate(clean_clips, start=1)):
                     dl_count += 1
@@ -1823,8 +1824,11 @@ def start_twitch_clips_batch_job(
                         job_id,
                         stage="extracting_audio",
                         progress=int(5 + (dl_count / n_total) * 25),
-                        message=f"⬇️ Скачано клипов: {dl_count}/{n_total} (параллельно)...",
+                        message=f"⬇️ Скачано клипов: {len(downloaded_items)}/{n_total} (проверено {dl_count}/{n_total})...",
                     )
+
+            if not downloaded_items:
+                raise RuntimeError("Не удалось скачать ни один клип (проверьте интернет или включите прокси/Cookies во вкладке «⚙️ Система»)")
 
             # STAGE 2: Transcribe & render all downloaded clips
             for idx, item in enumerate(clean_clips, start=1):
