@@ -764,10 +764,11 @@ def api_download_all_clips(job_id: str) -> FileResponse:
 
     jdir = JOBS_DIR / job_id
     zip_path = jdir / f"tikcut_{job_id}_all_clips.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+    tmp_zip = zip_path.with_suffix(".tmp")
+    with zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_STORED) as zf:
         for idx, c in enumerate(job["clips"], start=1):
             mp4 = jdir / f"{c['id']}.mp4"
-            if mp4.exists():
+            if mp4.exists() and mp4.stat().st_size > 10_000:
                 zf.write(mp4, arcname=f"clip_{idx}_score{c.get('viral_score', 0)}_9x16.mp4")
         # Also include a ready-to-paste captions.txt file!
         captions_lines = []
@@ -776,6 +777,7 @@ def api_download_all_clips(job_id: str) -> FileResponse:
             captions_lines.append(c.get("tiktok_caption", ""))
             captions_lines.append("")
         zf.writestr("captions_and_hashtags.txt", "\n".join(captions_lines))
+    tmp_zip.replace(zip_path)
 
     return FileResponse(
         path=str(zip_path),

@@ -121,13 +121,15 @@ def _auto_send_clips_to_telegram(job_id: str, rendered_clips: List[Dict[str, Any
         if is_job_cancelled(job_id):
             break
         mp4 = jdir / f"{c['id']}.mp4"
-        if not mp4.exists():
+        if not mp4.exists() or mp4.stat().st_size < 10_000:
             continue
         _update_job(job_id, progress=98, message=f"✈️ Отправка клипа {idx}/{len(rendered_clips)} в Telegram...")
         try:
             send_clip_to_telegram(token, chat_id, mp4, caption=c.get("tiktok_caption") or c.get("title", ""))
             c["sent_telegram"] = True
             sent += 1
+            if idx < len(rendered_clips):
+                time.sleep(1.1)
         except Exception as exc:
             print(f"[telegram] auto-send clip {c['id']} failed: {exc}")
     return sent
@@ -1773,10 +1775,17 @@ def start_twitch_clips_batch_job(
                     message=f"Клип {idx}/{n_total}: загрузка «{c_title[:36]}»...",
                 )
                 raw_seg_path = jdir / f"raw_seg_{clip_id}.mp4"
-                try:
-                    raw_seg_path = download_clip_segment(c_url, 0.0, max(5.0, c_dur + 2.0), raw_seg_path)
-                except Exception as dl_err:
-                    print(f"[batch_pack] clip {idx} download failed: {dl_err}")
+                dl_ok = False
+                for dl_try in range(2):
+                    try:
+                        raw_seg_path = download_clip_segment(c_url, 0.0, max(5.0, c_dur + 2.0), raw_seg_path)
+                        dl_ok = raw_seg_path.exists() and raw_seg_path.stat().st_size > 10_000
+                        if dl_ok:
+                            break
+                    except Exception as dl_err:
+                        print(f"[batch_pack] clip {idx} download attempt {dl_try + 1} failed: {dl_err}")
+                        time.sleep(1.5)
+                if not dl_ok:
                     continue
 
                 seg_meta = probe_video(raw_seg_path)
@@ -1812,15 +1821,21 @@ def start_twitch_clips_batch_job(
                 out_mp4 = jdir / f"{clip_id}.mp4"
                 out_thumb = jdir / f"{clip_id}.jpg"
                 r_kwargs = _extract_render_kwargs(options, c_title)
-                render_clip(
-                    source_video=raw_seg_path,
-                    output_mp4=out_mp4,
-                    thumb_jpg=out_thumb,
-                    clip_start=0.0,
-                    clip_end=seg_dur,
-                    words=clip_words,
-                    **r_kwargs,
-                )
+                try:
+                    render_clip(
+                        source_video=raw_seg_path,
+                        output_mp4=out_mp4,
+                        thumb_jpg=out_thumb,
+                        clip_start=0.0,
+                        clip_end=seg_dur,
+                        words=clip_words,
+                        **r_kwargs,
+                    )
+                except Exception as ren_err:
+                    print(f"[batch_pack] render error on {clip_id}: {ren_err}")
+                    continue
+                if not out_mp4.exists() or out_mp4.stat().st_size < 10_000:
+                    continue
 
                 tags = ["📦 Пачка клипов"]
                 if item.get("streamer"):

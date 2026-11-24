@@ -4,6 +4,8 @@ import mimetypes
 import ssl
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
@@ -146,26 +148,74 @@ def send_clip_to_telegram(
             compressed_tmp = _compress_for_telegram(video_path, target_mb=43.0)
             send_path = compressed_tmp
 
-        fields = {"chat_id": cid, "supports_streaming": "true"}
+        dur_sec = 0
+        try:
+            pr = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(send_path)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8,
+            )
+            if pr.stdout.strip():
+                dur_sec = max(1, int(round(float(pr.stdout.strip()))))
+        except Exception:
+            pass
+
+        fields = {
+            "chat_id": cid,
+            "supports_streaming": "true",
+            "width": "1080",
+            "height": "1920",
+        }
+        if dur_sec > 0:
+            fields["duration"] = str(dur_sec)
         if caption:
             fields["caption"] = caption[:1020]
         mime = mimetypes.guess_type(str(send_path))[0] or "video/mp4"
-        data = _multipart_upload(
-            f"https://api.telegram.org/bot{token}/sendVideo",
-            fields=fields,
-            file_field="video",
-            filename=video_path.name,
-            file_bytes=send_path.read_bytes(),
-            mime_type=mime,
-            timeout=150,
-        )
-        if not data.get("ok"):
-            raise RuntimeError(data.get("description") or "Telegram API вернул ошибку")
-        return {
-            "ok": True,
-            "message_id": (data.get("result") or {}).get("message_id"),
-            "compressed": compressed_tmp is not None,
-        }
+        file_bytes = send_path.read_bytes()
+
+        last_err: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                data = _multipart_upload(
+                    f"https://api.telegram.org/bot{token}/sendVideo",
+                    fields=fields,
+                    file_field="video",
+                    filename=video_path.name,
+                    file_bytes=file_bytes,
+                    mime_type=mime,
+                    timeout=150,
+                )
+                if data.get("ok"):
+                    return {
+                        "ok": True,
+                        "message_id": (data.get("result") or {}).get("message_id"),
+                        "compressed": compressed_tmp is not None,
+                    }
+                retry_after = int(((data.get("parameters") or {}).get("retry_after")) or 0)
+                if retry_after > 0 and attempt < 2:
+                    time.sleep(min(retry_after + 1, 20))
+                    continue
+                raise RuntimeError(data.get("description") or "Telegram API вернул ошибку")
+            except urllib.error.HTTPError as he:
+                last_err = he
+                wait_s = 3 * (attempt + 1)
+                try:
+                    err_body = json.loads(he.read().decode("utf-8", errors="ignore"))
+                    ra = int(((err_body.get("parameters") or {}).get("retry_after")) or 0)
+                    if ra > 0:
+                        wait_s = min(ra + 1, 25)
+                except Exception:
+                    pass
+                if he.code in (429, 500, 502, 503, 504) and attempt < 2:
+                    time.sleep(wait_s)
+                    continue
+                raise RuntimeError(f"Telegram HTTP {he.code}: {he.reason}")
+            except Exception as exc:
+                last_err = exc
+                if attempt < 2:
+                    time.sleep(2.5 * (attempt + 1))
+                    continue
+                raise
+        raise RuntimeError(f"Не удалось отправить в Telegram: {last_err}")
     finally:
         if compressed_tmp is not None:
             compressed_tmp.unlink(missing_ok=True)

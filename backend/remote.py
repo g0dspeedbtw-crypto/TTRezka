@@ -696,9 +696,15 @@ def download_clip_segment(
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]/best",
+        "format": (
+            "best[ext=mp4]/best"
+            if is_short_clip_url
+            else "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]/best"
+        ),
         "merge_output_format": "mp4",
         "outtmpl": out_tpl,
+        "retries": 3,
+        "fragment_retries": 4,
         "concurrent_fragment_downloads": 4,
     }
     if not is_short_clip_url:
@@ -727,7 +733,10 @@ def download_clip_segment(
         media_url = (info or {}).get("url")
         if media_url:
             dur = max(2.0, e_t - s_t)
-            cmd = ["ffmpeg", "-y"]
+            cmd = [
+                "ffmpeg", "-y",
+                "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+            ]
             if not is_short_clip_url and s_t > 0.5:
                 cmd.extend(["-ss", f"{s_t:.2f}"])
             cmd.extend(["-i", media_url])
