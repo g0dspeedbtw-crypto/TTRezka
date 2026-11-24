@@ -493,34 +493,63 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
         n_total = max(1, len(highlights))
         total_recognized_words = len(words)
 
+        # STAGE 1: Parallel download ALL clip segments at once (4 simultaneous downloads!)
+        _update_job(
+            job_id,
+            stage="rendering",
+            progress=40,
+            message=f"⬇️ Параллельная загрузка всех {n_total} фрагментов сразу...",
+        )
+        downloaded_map: Dict[int, Path] = {}
+
+        def _dl_one_remote(pair):
+            i_idx, h_item = pair
+            if is_job_cancelled(job_id):
+                return i_idx, None
+            c_id = h_item["id"]
+            dest = jdir / f"raw_{c_id}.mp4"
+            for _try in range(2):
+                try:
+                    p = download_clip_segment(url=remote_url, start=h_item["start"], end=h_item["end"], output_mp4=dest)
+                    if p.exists() and p.stat().st_size > 10_000:
+                        return i_idx, p
+                except Exception as exc_dl:
+                    print(f"[remote] clip {c_id} download try {_try + 1} failed: {exc_dl}")
+                    time.sleep(1.2)
+            return i_idx, None
+
+        dl_done = 0
+        with ThreadPoolExecutor(max_workers=min(4, n_total)) as dl_pool:
+            for i_idx, p_path in dl_pool.map(_dl_one_remote, enumerate(highlights)):
+                dl_done += 1
+                if p_path is not None:
+                    downloaded_map[i_idx] = p_path
+                _update_job(
+                    job_id,
+                    stage="rendering",
+                    progress=int(40 + (dl_done / n_total) * 20),
+                    message=f"⬇️ Скачано фрагментов: {dl_done}/{n_total} (параллельно)...",
+                )
+
+        # STAGE 2: Transcribe & render all downloaded clips
         for idx, hl in enumerate(highlights):
             if is_job_cancelled(job_id):
                 _update_job(job_id, status="cancelled", stage="cancelled", message="⏹ Обработка остановлена пользователем.", clips=rendered_clips)
                 return
+            raw_seg_path = downloaded_map.get(idx)
+            if not raw_seg_path:
+                continue
             clip_id = hl["id"]
-            base_pct = 40 + (idx / n_total) * 58
-            step_span = 58 / n_total
+            base_pct = 60 + (idx / n_total) * 38
+            step_span = 38 / n_total
 
-            _update_job(
-                job_id,
-                stage="rendering",
-                progress=int(base_pct),
-                message=f"Клип {idx + 1}/{n_total}: загрузка только фрагмента ({int(hl['duration'])} сек)...",
-            )
-
-            raw_seg_path = download_clip_segment(
-                url=remote_url,
-                start=hl["start"],
-                end=hl["end"],
-                output_mp4=jdir / f"raw_{clip_id}.mp4",
-            )
             seg_meta = probe_video(raw_seg_path)
             seg_dur = float(seg_meta.get("duration") or hl["duration"])
 
             _update_job(
                 job_id,
                 stage="rendering",
-                progress=int(base_pct + step_span * 0.35),
+                progress=int(base_pct + step_span * 0.2),
                 message=f"Клип {idx + 1}/{n_total}: точные русские авто-субтитры (Whisper)...",
             )
             clip_wav = jdir / f"raw_{clip_id}.wav"
@@ -545,7 +574,7 @@ def _run_remote_pipeline(job_id: str, options: Dict[str, Any]) -> None:
             _update_job(
                 job_id,
                 stage="rendering",
-                progress=int(base_pct + step_span * 0.68),
+                progress=int(base_pct + step_span * 0.65),
                 message=f"Клип {idx + 1}/{n_total}: рендер 9:16 + эффекты и субтитры...",
             )
             out_mp4 = jdir / f"{clip_id}.mp4"
@@ -1757,36 +1786,60 @@ def start_twitch_clips_batch_job(
             total_words = 0
             n_total = len(clean_clips)
 
+            # STAGE 1: Parallel download ALL selected Twitch clips at once (up to 4 simultaneous!)
+            _update_job(
+                job_id,
+                stage="extracting_audio",
+                progress=5,
+                message=f"⬇️ Параллельная загрузка всех {n_total} выбранных клипов сразу...",
+            )
+            downloaded_items: Dict[int, Path] = {}
+
+            def _dl_pack_item(pair):
+                idx_1, it = pair
+                if is_job_cancelled(job_id):
+                    return idx_1, None
+                c_id = f"clip_{idx_1:02d}"
+                c_url = it["url"].strip()
+                c_dur = float(it.get("duration") or 45.0)
+                dest = jdir / f"raw_seg_{c_id}.mp4"
+                for dl_try in range(2):
+                    try:
+                        p = download_clip_segment(c_url, 0.0, max(5.0, c_dur + 2.0), dest)
+                        if p.exists() and p.stat().st_size > 10_000:
+                            return idx_1, p
+                    except Exception as dl_err:
+                        print(f"[batch_pack] clip {idx_1} download try {dl_try + 1} failed: {dl_err}")
+                        time.sleep(1.2)
+                return idx_1, None
+
+            dl_count = 0
+            with ThreadPoolExecutor(max_workers=min(4, n_total)) as dl_pool:
+                for idx_1, p_path in dl_pool.map(_dl_pack_item, enumerate(clean_clips, start=1)):
+                    dl_count += 1
+                    if p_path is not None:
+                        downloaded_items[idx_1] = p_path
+                    _update_job(
+                        job_id,
+                        stage="extracting_audio",
+                        progress=int(5 + (dl_count / n_total) * 25),
+                        message=f"⬇️ Скачано клипов: {dl_count}/{n_total} (параллельно)...",
+                    )
+
+            # STAGE 2: Transcribe & render all downloaded clips
             for idx, item in enumerate(clean_clips, start=1):
                 if is_job_cancelled(job_id):
                     _update_job(job_id, status="cancelled", stage="cancelled", message="⏹ Пакетный рендер остановлен.", clips=rendered_clips)
                     return
 
-                clip_id = f"clip_{idx:02d}"
-                base_pct = int(((idx - 1) / n_total) * 94) + 3
-                c_title = (item.get("title") or f"Клип #{idx}").strip()
-                c_url = item["url"].strip()
-                c_dur = float(item.get("duration") or 45.0)
-
-                _update_job(
-                    job_id,
-                    stage="rendering",
-                    progress=base_pct,
-                    message=f"Клип {idx}/{n_total}: загрузка «{c_title[:36]}»...",
-                )
-                raw_seg_path = jdir / f"raw_seg_{clip_id}.mp4"
-                dl_ok = False
-                for dl_try in range(2):
-                    try:
-                        raw_seg_path = download_clip_segment(c_url, 0.0, max(5.0, c_dur + 2.0), raw_seg_path)
-                        dl_ok = raw_seg_path.exists() and raw_seg_path.stat().st_size > 10_000
-                        if dl_ok:
-                            break
-                    except Exception as dl_err:
-                        print(f"[batch_pack] clip {idx} download attempt {dl_try + 1} failed: {dl_err}")
-                        time.sleep(1.5)
-                if not dl_ok:
+                raw_seg_path = downloaded_items.get(idx)
+                if not raw_seg_path:
                     continue
+
+                clip_id = f"clip_{idx:02d}"
+                base_pct = int(30 + ((idx - 1) / n_total) * 66)
+                c_title = (item.get("title") or f"Клип #{idx}").strip()
+                c_dur = float(item.get("duration") or 45.0)
 
                 seg_meta = probe_video(raw_seg_path)
                 seg_dur = float(seg_meta.get("duration") or c_dur or 20.0)
@@ -1797,7 +1850,7 @@ def start_twitch_clips_batch_job(
                     _update_job(
                         job_id,
                         stage="transcribing",
-                        progress=min(96, base_pct + int(30 / n_total)),
+                        progress=min(96, base_pct + int(25 / n_total)),
                         message=f"Клип {idx}/{n_total}: распознавание субтитров (Whisper)...",
                     )
                     seg_wav = jdir / f"seg_{clip_id}.wav"
@@ -1815,7 +1868,7 @@ def start_twitch_clips_batch_job(
                 _update_job(
                     job_id,
                     stage="rendering",
-                    progress=min(97, base_pct + int(60 / n_total)),
+                    progress=min(97, base_pct + int(50 / n_total)),
                     message=f"Клип {idx}/{n_total}: рендер 9:16 «{c_title[:36]}»...",
                 )
                 out_mp4 = jdir / f"{clip_id}.mp4"
