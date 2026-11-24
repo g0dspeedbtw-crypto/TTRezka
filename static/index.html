@@ -863,6 +863,27 @@
     </section>
   </main>
 
+  <!-- Instant Remote Clip Preview Modal (Watch before downloading/cutting!) -->
+  <div id="radarPreviewModal" class="modal hidden">
+    <div class="modal-backdrop" id="radarPreviewBackdrop"></div>
+    <div class="modal-panel" style="width: min(760px, 95vw);">
+      <div class="modal-header">
+        <div>
+          <h3 id="radarPreviewTitle">▶ Предпросмотр клипа</h3>
+          <div id="radarPreviewMeta" class="modal-sub">Посмотрите клип со звуком, прежде чем брать его в нарезку</div>
+        </div>
+        <button id="btnCloseRadarPreview" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div style="background:#000;border-radius:12px;overflow:hidden;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;">
+        <video id="radarPreviewVideo" controls autoplay playsinline style="width:100%;height:100%;object-fit:contain;"></video>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
+        <button id="btnRadarPreviewCancel" type="button" class="btn btn-ghost btn-sm">Закрыть</button>
+        <button id="btnRadarPreviewTake" type="button" class="btn btn-primary btn-sm">⚡ Взять этот клип в 9:16</button>
+      </div>
+    </div>
+  </div>
+
   <!-- TikTok Feed Lightbox Modal (#11) -->
   <div id="clipLightboxModal" class="modal hidden">
     <div class="modal-backdrop" id="lightboxBackdrop"></div>

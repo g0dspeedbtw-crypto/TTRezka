@@ -111,6 +111,41 @@ def fetch_twitch_top_clips(streamer_login: str, period: str = "7d", limit: int =
     return clips
 
 
+def resolve_clip_preview_url(clip_url: str) -> Dict[str, Any]:
+    """Resolve a direct playable MP4 stream URL for a Twitch clip (or short video) WITHOUT downloading it."""
+    url = (clip_url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("Некорректная ссылка на клип")
+    ydl_opts = _apply_network_opts(
+        {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "format": "best[ext=mp4]/best",
+        }
+    )
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not info:
+        raise RuntimeError("Не удалось получить поток клипа")
+    mp4_url = info.get("url")
+    if not mp4_url and info.get("formats"):
+        mp4s = [f for f in info["formats"] if f.get("url") and f.get("ext") == "mp4"]
+        if mp4s:
+            mp4_url = mp4s[-1]["url"]
+        else:
+            any_f = [f for f in info["formats"] if f.get("url")]
+            if any_f:
+                mp4_url = any_f[-1]["url"]
+    if not mp4_url:
+        raise RuntimeError("Не удалось получить прямую ссылку на видео клипа")
+    return {
+        "mp4_url": mp4_url,
+        "title": info.get("title") or "Предпросмотр клипа",
+        "duration": int(round(float(info.get("duration") or 0))),
+    }
+
+
 # =====================================================================
 # Feature #3: Live Stream Instant Clipper (Twitch / YouTube Live)
 # =====================================================================

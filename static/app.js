@@ -109,6 +109,14 @@
   const btnLightboxNext = document.getElementById('btnLightboxNext');
   const btnLightboxFav = document.getElementById('btnLightboxFav');
   const btnLightboxDel = document.getElementById('btnLightboxDel');
+  const radarPreviewModal = document.getElementById('radarPreviewModal');
+  const radarPreviewBackdrop = document.getElementById('radarPreviewBackdrop');
+  const btnCloseRadarPreview = document.getElementById('btnCloseRadarPreview');
+  const btnRadarPreviewCancel = document.getElementById('btnRadarPreviewCancel');
+  const btnRadarPreviewTake = document.getElementById('btnRadarPreviewTake');
+  const radarPreviewVideo = document.getElementById('radarPreviewVideo');
+  const radarPreviewTitle = document.getElementById('radarPreviewTitle');
+  const radarPreviewMeta = document.getElementById('radarPreviewMeta');
   const urlInput = document.getElementById('urlInput');
   const btnProbeUrl = document.getElementById('btnProbeUrl');
   const dropZone = document.getElementById('dropZone');
@@ -3190,14 +3198,23 @@
           radarResultsGrid.classList.toggle('hidden', !lastRadarClips.length);
           radarResultsGrid.innerHTML = lastRadarClips.map((c, idx) => `
             <div class="radar-card">
-              ${c.thumbnail ? `<img src="${escapeHtml(c.thumbnail)}" alt="" loading="lazy" />` : ''}
+              ${c.thumbnail ? `<img src="${escapeHtml(c.thumbnail)}" alt="" loading="lazy" class="btn-radar-watch" data-idx="${idx}" style="cursor:pointer;" title="Нажмите для предпросмотра" />` : ''}
               <div class="radar-card-body">
                 <div class="radar-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
                 <div class="radar-meta">👁 ${Number(c.views || 0).toLocaleString('ru-RU')} • ⏱ ${c.duration}с ${c.game ? '• ' + escapeHtml(c.game) : ''}</div>
-                <button type="button" class="btn btn-primary btn-sm btn-radar-pick" data-idx="${idx}" style="margin-top:auto;">⚡ В 9:16</button>
+                <div style="display:flex;gap:6px;margin-top:auto;">
+                  <button type="button" class="btn btn-secondary btn-sm btn-radar-watch" data-idx="${idx}" style="flex:1;">▶ Смотреть</button>
+                  <button type="button" class="btn btn-primary btn-sm btn-radar-pick" data-idx="${idx}" style="flex:1;">⚡ В 9:16</button>
+                </div>
               </div>
             </div>
           `).join('');
+          radarResultsGrid.querySelectorAll('.btn-radar-watch').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              const clip = lastRadarClips[Number(btn.dataset.idx)];
+              if (clip) openRadarClipPreview(clip);
+            });
+          });
           radarResultsGrid.querySelectorAll('.btn-radar-pick').forEach((btn) => {
             btn.addEventListener('click', async () => {
               const clip = lastRadarClips[Number(btn.dataset.idx)];
@@ -3655,6 +3672,7 @@
     const isTyping = tag === 'input' || tag === 'textarea' || (document.activeElement && document.activeElement.isContentEditable);
 
     if (ev.key === 'Escape') {
+      closeRadarPreview();
       [clipEditorModal, accountModal, dashboardModal, webcamCropModal, changelogModal, updateModal, historyDrawer].forEach((el) => {
         if (el) el.classList.add('hidden');
       });
@@ -3958,14 +3976,23 @@
           radarResultsGrid.classList.toggle('hidden', !lastRadarClips.length);
           radarResultsGrid.innerHTML = lastRadarClips.map((c, idx) => `
             <div class="radar-card">
-              ${c.thumbnail ? `<img src="${escapeHtml(c.thumbnail)}" alt="" loading="lazy" />` : ''}
+              ${c.thumbnail ? `<img src="${escapeHtml(c.thumbnail)}" alt="" loading="lazy" class="btn-radar-watch" data-idx="${idx}" style="cursor:pointer;" title="Нажмите для предпросмотра" />` : ''}
               <div class="radar-card-body">
                 <div class="radar-title" title="${escapeHtml(c.title)}">${escapeHtml(c.title)}</div>
                 <div class="radar-meta"><strong>${escapeHtml(c.streamer)}</strong> • 👁 ${Number(c.views || 0).toLocaleString('ru-RU')} • ${c.duration}с</div>
-                <button type="button" class="btn btn-primary btn-sm btn-radar-pick" data-idx="${idx}" style="margin-top:auto;">⚡ В 9:16</button>
+                <div style="display:flex;gap:6px;margin-top:auto;">
+                  <button type="button" class="btn btn-secondary btn-sm btn-radar-watch" data-idx="${idx}" style="flex:1;">▶ Смотреть</button>
+                  <button type="button" class="btn btn-primary btn-sm btn-radar-pick" data-idx="${idx}" style="flex:1;">⚡ В 9:16</button>
+                </div>
               </div>
             </div>
           `).join('');
+          radarResultsGrid.querySelectorAll('.btn-radar-watch').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              const clip = lastRadarClips[Number(btn.dataset.idx)];
+              if (clip) openRadarClipPreview(clip);
+            });
+          });
           radarResultsGrid.querySelectorAll('.btn-radar-pick').forEach((btn) => {
             btn.addEventListener('click', async () => {
               const clip = lastRadarClips[Number(btn.dataset.idx)];
@@ -3982,6 +4009,56 @@
         btnMonitorFavStreamers.disabled = false;
         btnMonitorFavStreamers.textContent = '📡 Проверить всех (24ч)';
       }
+    });
+  }
+
+  // Instant Remote Clip Preview Modal (v3.1.2: watch clip with sound BEFORE downloading/cutting!)
+  let activePreviewClip = null;
+  function closeRadarPreview() {
+    if (radarPreviewVideo) {
+      radarPreviewVideo.pause();
+      radarPreviewVideo.removeAttribute('src');
+      radarPreviewVideo.load();
+    }
+    if (radarPreviewModal) radarPreviewModal.classList.add('hidden');
+    activePreviewClip = null;
+  }
+  async function openRadarClipPreview(clip) {
+    if (!radarPreviewModal || !radarPreviewVideo) return;
+    activePreviewClip = clip;
+    radarPreviewModal.classList.remove('hidden');
+    if (radarPreviewTitle) radarPreviewTitle.textContent = clip.title || 'Предпросмотр клипа';
+    if (radarPreviewMeta) radarPreviewMeta.textContent = '⏳ Загрузка видеопотока клипа (без скачивания на диск)...';
+    radarPreviewVideo.pause();
+    radarPreviewVideo.removeAttribute('src');
+    try {
+      const res = await fetch('/api/twitch-clips/preview-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: clip.url }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Не удалось загрузить поток');
+      radarPreviewVideo.src = data.mp4_url;
+      radarPreviewVideo.play().catch(() => {});
+      if (radarPreviewMeta) {
+        radarPreviewMeta.textContent = `${clip.streamer ? clip.streamer + ' • ' : ''}👁 ${Number(clip.views || 0).toLocaleString('ru-RU')} • ⏱ ${clip.duration || data.duration || '?'}с`;
+      }
+    } catch (err) {
+      if (radarPreviewMeta) radarPreviewMeta.textContent = `⚠️ ${err.message || 'Не удалось открыть предпросмотр'}`;
+    }
+  }
+  if (btnCloseRadarPreview) btnCloseRadarPreview.addEventListener('click', closeRadarPreview);
+  if (btnRadarPreviewCancel) btnRadarPreviewCancel.addEventListener('click', closeRadarPreview);
+  if (radarPreviewBackdrop) radarPreviewBackdrop.addEventListener('click', closeRadarPreview);
+  if (btnRadarPreviewTake) {
+    btnRadarPreviewTake.addEventListener('click', async () => {
+      const clip = activePreviewClip;
+      closeRadarPreview();
+      if (!clip) return;
+      switchSourceTab('url');
+      urlInput.value = clip.url;
+      await probeUrl();
     });
   }
 

@@ -86,7 +86,7 @@ from backend.telegram_export import (
     send_clip_to_telegram,
     test_telegram_connection,
 )
-from backend.twitch_radar import capture_live_stream_clip, fetch_twitch_top_clips
+from backend.twitch_radar import capture_live_stream_clip, fetch_twitch_top_clips, resolve_clip_preview_url
 
 app = FastAPI(title="TikCut Studio", version="1.0.0")
 
@@ -1070,6 +1070,20 @@ def api_twitch_clips_search(req: TwitchClipsSearchRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка радара Twitch: {exc}")
+
+
+class ClipPreviewUrlRequest(BaseModel):
+    url: str
+
+
+@app.post("/api/twitch-clips/preview-url")
+def api_twitch_clip_preview_url(req: ClipPreviewUrlRequest) -> Dict[str, Any]:
+    try:
+        return resolve_clip_preview_url(req.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Не удалось открыть предпросмотр: {exc}")
 
 
 class LiveClipRequest(BaseModel):
